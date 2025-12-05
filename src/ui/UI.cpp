@@ -5,6 +5,9 @@
 
 #include <hyprtoolkit/core/Output.hpp>
 
+#include <hyprutils/os/Process.hpp>
+using namespace Hyprutils::OS;
+
 CUI::CUI()  = default;
 CUI::~CUI() = default;
 
@@ -181,6 +184,10 @@ void CUI::exit(bool closeHl) {
         if (closeHl && !m_noExit) {
             //NOLINTNEXTLINE
             HyprlandIPC::getFromSocket("/dispatch exit");
+            if (m_postExitCmd) {
+                CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
+                proc.runAsync();
+            }
         }
     });
 }

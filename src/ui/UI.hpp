@@ -64,11 +64,12 @@ class CUI {
     CUI();
     ~CUI();
 
-    bool                      run();
-    SP<Hyprtoolkit::IBackend> backend();
+    bool                       run();
+    SP<Hyprtoolkit::IBackend>  backend();
 
-    bool                      m_noExit = false;
-    std::string               m_shutdownLabel;
+    bool                       m_noExit = false;
+    std::optional<std::string> m_postExitCmd;
+    std::string                m_shutdownLabel;
 
   private:
     void                           registerOutput(const SP<Hyprtoolkit::IOutput>& mon);

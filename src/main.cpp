@@ -12,6 +12,7 @@ int main(int argc, const char** argv, const char** envp) {
     ASSERT(parser.registerBoolOption("dry-run", "", "Do not exit apps, only show UI"));
     ASSERT(parser.registerBoolOption("no-exit", "", "Do not exit hyprland once apps close"));
     ASSERT(parser.registerStringOption("top-label", "t", "Set the text appearing on top (set to \"Shutting down...\" by default)"));
+    ASSERT(parser.registerStringOption("post-cmd", "p", "Set a command ran after all apps and Hyprland shut down"));
     ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
     ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
@@ -45,6 +46,7 @@ int main(int argc, const char** argv, const char** envp) {
     g_ui                  = makeUnique<CUI>();
     g_ui->m_noExit        = parser.getBool("no-exit").value_or(false);
     g_ui->m_shutdownLabel = parser.getString("top-label").value_or("Shutting down...");
+    g_ui->m_postExitCmd   = parser.getString("post-cmd");
     g_ui->run();
 
     return 0;

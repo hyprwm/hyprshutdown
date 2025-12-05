@@ -57,6 +57,19 @@ void CApp::kill() {
         g_logger->log(LOG_ERR, "CApp::quit: signal failed for pid {}, err: {}", m_pid, strerror(errno));
 }
 
+bool CApp::appAlive() const {
+    if (m_pid <= 0)
+        return false;
+
+    if (::kill(m_pid, 0) == 0)
+        return true;
+
+    if (errno == EPERM)
+        return true;
+
+    return false;
+}
+
 bool CApp::operator==(const glz::generic& object) const {
     if (!object.contains("address"))
         return false;
@@ -154,7 +167,7 @@ bool CAppState::updateState() {
 
     const auto BEFORE = m_apps.size();
 
-    std::erase_if(m_apps, [&table](const auto& e) { return !std::ranges::any_of(table, [&e](const auto& te) { return te == *e; }); });
+    std::erase_if(m_apps, [&table](const auto& e) { return !e->appAlive() && !std::ranges::any_of(table, [&e](const auto& te) { return te == *e; }); });
 
     g_logger->log(LOG_DEBUG, "Updated state: apps size {}", m_apps.size());
 

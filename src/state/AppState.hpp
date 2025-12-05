@@ -17,6 +17,7 @@ namespace State {
         CApp(CApp&)       = delete;
         CApp(CApp&&)      = delete;
 
+        bool        appAlive() const;
         bool        operator==(const glz::generic& object) const;
 
         void        quit();

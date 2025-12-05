@@ -2,9 +2,34 @@
 #include "ui/UI.hpp"
 #include "state/AppState.hpp"
 
+#include <csignal>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <hyprutils/cli/ArgumentParser.hpp>
 
 #include <print>
+
+// fork off of the parent process, so we don't get killed
+static void forkoff() {
+    pid_t pid = fork();
+    if (pid < 0)
+        exit(EXIT_FAILURE);
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
+
+    if (setsid() < 0)
+        exit(EXIT_FAILURE);
+
+    signal(SIGHUP, SIG_IGN);
+
+    pid = fork();
+    if (pid < 0)
+        exit(EXIT_FAILURE);
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
+
+    umask(0);
+}
 
 int main(int argc, const char** argv, const char** envp) {
     Hyprutils::CLI::CArgumentParser parser({argv, sc<size_t>(argc)});
@@ -37,6 +62,8 @@ int main(int argc, const char** argv, const char** envp) {
         g_logger->log(LOG_ERR, "Cannot run under a non-hyprland environment");
         return 1;
     }
+
+    forkoff();
 
     if (!State::state()->init()) {
         g_logger->log(LOG_ERR, "Failed to init state");

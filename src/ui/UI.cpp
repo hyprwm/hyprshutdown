@@ -87,7 +87,6 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
     m_spacer  = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, 20.F}})->commence();
     m_spacer2 = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, 20.F}})->commence();
 
-    // TODO: apps list...
     m_appListNull = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, 1.F}})->commence();
     m_appListNull->setGrow(true);
 

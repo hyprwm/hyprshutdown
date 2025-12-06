@@ -186,3 +186,14 @@ void CAppState::killAllApps() const {
         a->kill();
     }
 }
+
+void CAppState::reexitApps() const {
+    if (m_dryRun) {
+        g_logger->log(LOG_TRACE, "CAppState::reexitApps: ignoring, dry run");
+        return;
+    }
+
+    for (const auto& a : m_apps) {
+        a->quit();
+    }
+}

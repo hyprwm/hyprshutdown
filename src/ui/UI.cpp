@@ -193,12 +193,24 @@ void CUI::exit(bool closeHl) {
 }
 
 void CUI::setTimer() {
+    // every 5 seconds or so, attempt to sigterm apps again
+    static uint16_t          counter     = 0;
+    constexpr const uint16_t COUNTER_MAX = 30;
+
     m_updateTimer = m_backend->addTimer(
-        std::chrono::seconds(1),
+        std::chrono::milliseconds(150),
         [this](ASP<Hyprtoolkit::CTimer> timer, void* d) {
             if (State::state()->apps().empty()) {
                 exit(true);
                 return;
+            }
+
+            counter++;
+
+            if (counter > COUNTER_MAX) {
+                g_logger->log(LOG_DEBUG, "Re-closing apps");
+                counter = 0;
+                State::state()->reexitApps();
             }
 
             if (!State::state()->updateState()) {

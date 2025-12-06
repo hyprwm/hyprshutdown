@@ -44,6 +44,7 @@ namespace State {
         bool                         updateState();
         float                        secondsPassed() const;
         void                         killAllApps() const;
+        void                         reexitApps() const;
 
         const std::vector<UP<CApp>>& apps() const;
 

@@ -6,7 +6,13 @@
 #include <ranges>
 #include <csignal>
 
+#include <hyprutils/string/String.hpp>
+
 using namespace State;
+
+static const std::vector<const char*> IGNORE_DAEMONS = {
+    "Xwayland",
+};
 
 SP<CAppState> State::state() {
     static auto state = makeShared<CAppState>();
@@ -28,6 +34,10 @@ CApp::CApp(glz::generic::object_t& object) {
         m_xwayland = object["xwayland"].get_boolean();
     if (object.contains("pid"))
         m_pid = sc<int64_t>(object["pid"].get_number());
+}
+
+CApp::CApp(const std::string& name, int pid) : m_class(name), m_pid(pid), m_alwaysUsePid(true) {
+    ;
 }
 
 void CApp::quit() {
@@ -79,7 +89,65 @@ bool CApp::operator==(const glz::generic& object) const {
     return m_address == object["address"].get_string();
 }
 
+static std::optional<std::string> extractFromStatus(std::ifstream& ifs, const std::string_view& what) {
+    std::string line;
+    std::string full = std::string{what} + ":";
+    while (std::getline(ifs, line)) {
+        if (!line.starts_with(full))
+            continue;
+
+        return Hyprutils::String::trim(line.substr(full.size()));
+    }
+
+    return std::nullopt;
+}
+
+static bool isPathAChildOfHl(const std::filesystem::path& path, int hlPid) {
+    if (!Hyprutils::String::isNumber(path.stem()))
+        return false;
+
+    std::ifstream ifs(path / "status");
+    const auto    PIDSTR = extractFromStatus(ifs, "PPid");
+
+    if (!PIDSTR)
+        return false;
+
+    static int OUR_PID = getpid();
+
+    try {
+        int pid = std::stoi(*PIDSTR);
+        return pid != OUR_PID && pid == hlPid;
+    } catch (...) { ; }
+
+    return false;
+}
+
+static std::string pathPidName(const std::filesystem::path& path) {
+    std::error_code ec;
+
+    if (!Hyprutils::String::isNumber(path.stem()))
+        return "";
+
+    std::ifstream ifs(path / "status");
+    const auto    NAMESTR = extractFromStatus(ifs, "Name");
+
+    return NAMESTR.value_or("");
+}
+
+static int pathPid(const std::filesystem::path& path) {
+    std::error_code ec;
+
+    if (!Hyprutils::String::isNumber(path.stem()))
+        return -1;
+
+    try {
+        return std::stoi(path.stem());
+    } catch (...) { return -1; }
+}
+
 bool CAppState::init() {
+
+    // windows
     {
         const auto RET = HyprlandIPC::getFromSocket("j/clients");
 
@@ -102,10 +170,9 @@ bool CAppState::init() {
         for (auto& el : jsonArr) {
             m_apps.emplace_back(makeUnique<CApp>(el.get_object()));
         }
-
-        g_logger->log(LOG_DEBUG, "Parsed {} apps from socket", m_apps.size());
     }
 
+    // layers
     {
         const auto RET = HyprlandIPC::getFromSocket("j/layers");
 
@@ -130,6 +197,54 @@ bool CAppState::init() {
         }
 
         g_logger->log(LOG_DEBUG, "Parsed {} apps from socket", m_apps.size());
+    }
+
+    // children of the Hyprland process
+    // TODO: make a kernel cgroup in hl. This can miss things.
+    // Maybe keep this for BSDs, which don't do cgroups, once we figure out PPid on BSDs.
+    {
+        const auto INSTANCES = HyprlandIPC::instances();
+        const auto HIS       = getenv("HYPRLAND_INSTANCE_SIGNATURE");
+
+        if (HIS && HIS[0] != '\0') {
+
+            const HyprlandIPC::SInstanceData* instance = nullptr;
+
+            for (const auto& I : INSTANCES) {
+                if (I.id != HIS)
+                    continue;
+
+                instance = &I;
+                break;
+            }
+
+            if (!instance)
+                g_logger->log(LOG_ERR, "Can't get children: no instance??");
+            else {
+                // get all processes that have a PPid of us
+                std::error_code ec;
+
+                // skip this op if there is no procfs (BSD)
+                if (std::filesystem::exists("/proc/self", ec) && !ec) {
+                    for (const auto& p : std::filesystem::directory_iterator("/proc/", ec)) {
+                        if (!std::filesystem::exists(p, ec) || ec)
+                            continue;
+
+                        if (!isPathAChildOfHl(p, instance->pid))
+                            continue;
+
+                        const auto NAME = pathPidName(p);
+
+                        if (std::ranges::contains(IGNORE_DAEMONS, NAME))
+                            continue;
+
+                        m_apps.emplace_back(makeUnique<CApp>(NAME, pathPid(p)));
+                    }
+                }
+            }
+
+        } else
+            g_logger->log(LOG_ERR, "Can't get children: no HIS");
     }
 
     // exit them if not dry run

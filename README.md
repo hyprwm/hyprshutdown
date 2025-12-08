@@ -19,7 +19,7 @@ Add these inputs to your `flake.nix`.
         hyprshutdown.url = "github:hyprwm/hyprshutdown";
     };
 
-    outputs = { self, nixpkgs, ...}@inputs:
+    outputs = { self, nixpkgs, ... }@inputs:
     {
         ...
     };
@@ -29,7 +29,7 @@ Add these inputs to your `flake.nix`.
 Add the package to your `home.nix`.
 
 ```nix
-{ pkgs, inputs, ...}:
+{ pkgs, inputs, ... }:
 {
 
     ...

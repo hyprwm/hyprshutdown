@@ -1,6 +1,7 @@
 #include "AppState.hpp"
 #include "HyprlandIPC.hpp"
 #include "../helpers/Logger.hpp"
+#include "../helpers/OS.hpp"
 
 #include <algorithm>
 #include <ranges>
@@ -89,62 +90,6 @@ bool CApp::operator==(const glz::generic& object) const {
     return m_address == object["address"].get_string();
 }
 
-static std::optional<std::string> extractFromStatus(std::ifstream& ifs, const std::string_view& what) {
-    std::string line;
-    std::string full = std::string{what} + ":";
-    while (std::getline(ifs, line)) {
-        if (!line.starts_with(full))
-            continue;
-
-        return Hyprutils::String::trim(line.substr(full.size()));
-    }
-
-    return std::nullopt;
-}
-
-static bool isPathAChildOfHl(const std::filesystem::path& path, int hlPid) {
-    if (!Hyprutils::String::isNumber(path.stem()))
-        return false;
-
-    std::ifstream ifs(path / "status");
-    const auto    PIDSTR = extractFromStatus(ifs, "PPid");
-
-    if (!PIDSTR)
-        return false;
-
-    static int OUR_PID = getpid();
-
-    try {
-        int pid = std::stoi(*PIDSTR);
-        return pid != OUR_PID && pid == hlPid;
-    } catch (...) { ; }
-
-    return false;
-}
-
-static std::string pathPidName(const std::filesystem::path& path) {
-    std::error_code ec;
-
-    if (!Hyprutils::String::isNumber(path.stem()))
-        return "";
-
-    std::ifstream ifs(path / "status");
-    const auto    NAMESTR = extractFromStatus(ifs, "Name");
-
-    return NAMESTR.value_or("");
-}
-
-static int pathPid(const std::filesystem::path& path) {
-    std::error_code ec;
-
-    if (!Hyprutils::String::isNumber(path.stem()))
-        return -1;
-
-    try {
-        return std::stoi(path.stem());
-    } catch (...) { return -1; }
-}
-
 bool CAppState::init() {
 
     // windows
@@ -222,24 +167,20 @@ bool CAppState::init() {
                 g_logger->log(LOG_ERR, "Can't get children: no instance??");
             else {
                 // get all processes that have a PPid of us
-                std::error_code ec;
+                const auto PROCS = OS::getAllPids();
 
-                // skip this op if there is no procfs (BSD)
-                if (std::filesystem::exists("/proc/self", ec) && !ec) {
-                    for (const auto& p : std::filesystem::directory_iterator("/proc/", ec)) {
-                        if (!std::filesystem::exists(p, ec) || ec)
-                            continue;
+                for (const auto& pid : PROCS) {
 
-                        if (!isPathAChildOfHl(p, instance->pid))
-                            continue;
+                    // check if child
+                    if (OS::ppidOf(pid) != instance->pid)
+                        continue;
 
-                        const auto NAME = pathPidName(p);
+                    const auto NAME = OS::appNameForPid(pid);
 
-                        if (std::ranges::contains(IGNORE_DAEMONS, NAME))
-                            continue;
+                    if (std::ranges::contains(IGNORE_DAEMONS, NAME))
+                        continue;
 
-                        m_apps.emplace_back(makeUnique<CApp>(NAME, pathPid(p)));
-                    }
+                    m_apps.emplace_back(makeUnique<CApp>(NAME, pid));
                 }
             }
 

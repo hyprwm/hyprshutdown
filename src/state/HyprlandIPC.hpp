@@ -9,7 +9,7 @@ namespace HyprlandIPC {
     struct SInstanceData {
         std::string id;
         uint64_t    time;
-        uint64_t    pid;
+        int64_t     pid;
         std::string wlSocket;
     };
 

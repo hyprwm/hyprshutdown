@@ -181,12 +181,15 @@ void CUI::exit(bool closeHl) {
         g_ui->m_backend->destroy();
         g_ui->m_backend.reset();
 
-        if (closeHl && !m_noExit) {
-            //NOLINTNEXTLINE
-            HyprlandIPC::getFromSocket("/dispatch exit");
+        if (closeHl) {
             if (m_postExitCmd) {
                 CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
                 proc.runAsync();
+            }
+
+            if (!m_noExit) {
+                //NOLINTNEXTLINE
+                HyprlandIPC::getFromSocket("/dispatch exit");
             }
         }
     });

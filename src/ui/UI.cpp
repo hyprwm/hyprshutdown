@@ -184,7 +184,7 @@ void CUI::exit(bool closeHl) {
         if (closeHl) {
             if (m_postExitCmd) {
                 CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
-                proc.runSync();
+                proc.runAsync();
             }
 
             if (!m_noExit) {

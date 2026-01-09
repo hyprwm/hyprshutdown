@@ -71,7 +71,7 @@ int main(int argc, const char** argv, const char** envp) {
     }
 
     g_ui                  = makeUnique<CUI>();
-    g_ui->m_noExit        = parser.getBool("no-exit").value_or(false);
+    g_ui->m_noExit        = parser.getBool("no-exit").value_or(false) || State::state()->m_dryRun;
     g_ui->m_shutdownLabel = parser.getString("top-label").value_or("Shutting down...");
     g_ui->m_postExitCmd   = parser.getString("post-cmd");
     g_ui->run();

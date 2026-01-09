@@ -3,10 +3,48 @@
 #include "../state/AppState.hpp"
 #include "../state/HyprlandIPC.hpp"
 
-#include <hyprtoolkit/core/Output.hpp>
+#include <algorithm>
 
+#include <hyprtoolkit/core/Output.hpp>
+#include <hyprtoolkit/types/SizeType.hpp>
+#include <hyprutils/memory/SharedPtr.hpp>
 #include <hyprutils/os/Process.hpp>
+
 using namespace Hyprutils::OS;
+
+namespace {
+    using ButtonPtr                        = Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement>;
+    constexpr float kButtonBaseHeight      = 25.F;
+    constexpr float kButtonFontScale       = 0.40F;
+    constexpr float kButtonCharWidthFactor = 0.6F;
+
+    float           buttonWidthForLabel(std::string_view label, float padding, float fontSize) {
+        const float textWidth = static_cast<float>(label.size()) * (fontSize * kButtonCharWidthFactor);
+        return textWidth + (std::max(0.F, padding) * 2.F);
+    }
+
+    template <typename OnClick, typename Configure = std::function<void(const ButtonPtr&)>>
+    ButtonPtr makeButton(std::string_view label, OnClick&& onClick, float padding = 0.F, Configure configure = {}) {
+        padding = std::max(0.F, padding);
+
+        const float buttonHeight = kButtonBaseHeight + (padding * 2.F);
+        const float fontSize     = std::max(10.F, buttonHeight * kButtonFontScale);
+
+        auto        btn =
+            Hyprtoolkit::CButtonBuilder::begin()
+                ->label(std::string{label})
+                ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_ABSOLUTE, fontSize})
+                ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {buttonWidthForLabel(label, padding, fontSize), buttonHeight}})
+                ->onMainClick(std::forward<OnClick>(onClick))
+                ->commence();
+
+        if (configure) {
+            configure(btn);
+        }
+
+        return btn;
+    }
+}
 
 CUI::CUI()  = default;
 CUI::~CUI() = default;
@@ -112,26 +150,21 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
         Hyprtoolkit::CColumnLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->gap(8)->commence();
 
     m_buttonLayout =
-        Hyprtoolkit::CRowLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1, 25}})->gap(5)->commence();
+        Hyprtoolkit::CRowLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->gap(5)->commence();
     auto spacer3 = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, 1.F}})->commence();
     spacer3->setGrow(true, false);
 
     m_buttonLayout->addChild(spacer3);
 
-    m_forceQuit = Hyprtoolkit::CButtonBuilder::begin()
-                      ->label("Force quit")
-                      ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, 25.F}})
-                      ->onMainClick([](Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement> e) {
-                          State::state()->killAllApps();
-                          g_ui->exit(true);
-                      })
-                      ->commence();
+    m_forceQuit = makeButton(
+        "Force quit",
+        [](auto) {
+            State::state()->killAllApps();
+            g_ui->exit(true);
+        },
+        8.F);
 
-    m_cancel = Hyprtoolkit::CButtonBuilder::begin()
-                   ->label("Cancel")
-                   ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, 25.F}})
-                   ->onMainClick([](Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement> e) { g_ui->exit(); })
-                   ->commence();
+    m_cancel = makeButton("Cancel", [](auto) { g_ui->exit(false); }, 8.F);
 
     m_buttonLayout->addChild(m_cancel);
     m_buttonLayout->addChild(m_forceQuit);
@@ -181,7 +214,7 @@ void CUI::exit(bool closeHl) {
         g_ui->m_backend->destroy();
         g_ui->m_backend.reset();
 
-        if (closeHl && !m_noExit) {
+        if (closeHl && !m_noExit && !State::state()->m_dryRun) {
             //NOLINTNEXTLINE
             HyprlandIPC::getFromSocket("/dispatch exit");
             if (m_postExitCmd) {

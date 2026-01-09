@@ -51,6 +51,8 @@ class CMonitorState {
         SAppListApp(const std::string_view& clazz, const std::string_view& title);
 
         SP<Hyprtoolkit::CNullElement>         m_null, m_titleNull, m_classNull;
+        SP<Hyprtoolkit::CRowLayoutElement>    m_row;
+        SP<Hyprtoolkit::CNullElement>         m_leftPad;
         SP<Hyprtoolkit::CColumnLayoutElement> m_layout;
         SP<Hyprtoolkit::CTextElement>         m_title;
         SP<Hyprtoolkit::CTextElement>         m_class;

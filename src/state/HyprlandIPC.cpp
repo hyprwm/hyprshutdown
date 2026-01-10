@@ -5,9 +5,15 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/signal.h>
 #include <unistd.h>
 
 #include <format>
+#include <filesystem>
+#include <fstream>
+#include <algorithm>
+#include <charconv>
+#include <csignal>
 
 #include <hyprutils/memory/Casts.hpp>
 
@@ -28,6 +34,14 @@ static std::string getRuntimeDir() {
     }
 
     return std::string{XDG} + "/hypr";
+}
+
+static std::optional<uint64_t> toUInt64(const std::string_view str) {
+    uint64_t value       = 0;
+    const auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
+    if (ec != std::errc() || ptr != str.data() + str.size())
+        return std::nullopt;
+    return value;
 }
 
 std::expected<std::string, std::string> HyprlandIPC::getFromSocket(const std::string& cmd) {
@@ -83,4 +97,68 @@ std::expected<std::string, std::string> HyprlandIPC::getFromSocket(const std::st
     close(SERVERSOCKET);
 
     return reply;
+}
+
+static std::optional<HyprlandIPC::SInstanceData> parseInstance(const std::filesystem::directory_entry& entry) {
+    if (!entry.is_directory())
+        return std::nullopt;
+
+    const auto    lockPath = entry.path() / "hyprland.lock";
+    std::ifstream ifs(lockPath);
+    if (!ifs.is_open())
+        return std::nullopt;
+
+    HyprlandIPC::SInstanceData data;
+    data.id = entry.path().filename().string();
+
+    const auto first = std::string_view{data.id}.find_first_of('_');
+    const auto last  = std::string_view{data.id}.find_last_of('_');
+    if (first == std::string_view::npos || last == std::string_view::npos || last <= first)
+        return std::nullopt;
+
+    auto time = toUInt64(std::string_view{data.id}.substr(first + 1, last - first - 1));
+    if (!time)
+        return std::nullopt;
+    data.time = *time;
+
+    std::string line;
+    if (!std::getline(ifs, line))
+        return std::nullopt;
+
+    auto pid = toUInt64(std::string_view{line});
+    if (!pid)
+        return std::nullopt;
+    data.pid = *pid;
+
+    if (!std::getline(ifs, data.wlSocket))
+        return std::nullopt;
+
+    if (std::getline(ifs, line) && !line.empty())
+        return std::nullopt; // more lines than expected
+
+    return data;
+}
+
+std::vector<HyprlandIPC::SInstanceData> HyprlandIPC::instances() {
+    std::vector<SInstanceData> result;
+
+    std::error_code            ec;
+    const auto                 runtimeDir = getRuntimeDir();
+    if (!std::filesystem::exists(runtimeDir, ec) || ec)
+        return result;
+
+    std::filesystem::directory_iterator it(runtimeDir, std::filesystem::directory_options::skip_permission_denied, ec);
+    if (ec)
+        return result;
+
+    for (const auto& el : it) {
+        if (auto instance = parseInstance(el))
+            result.emplace_back(std::move(*instance));
+    }
+
+    std::erase_if(result, [](const auto& el) { return kill(el.pid, 0) != 0 && errno == ESRCH; });
+
+    std::ranges::sort(result, {}, &SInstanceData::time);
+
+    return result;
 }

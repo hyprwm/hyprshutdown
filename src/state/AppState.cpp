@@ -1,12 +1,19 @@
 #include "AppState.hpp"
 #include "HyprlandIPC.hpp"
 #include "../helpers/Logger.hpp"
+#include "../helpers/OS.hpp"
 
 #include <algorithm>
 #include <ranges>
 #include <csignal>
 
+#include <hyprutils/string/String.hpp>
+
 using namespace State;
+
+static const std::vector<const char*> IGNORE_DAEMONS = {
+    "Xwayland",
+};
 
 SP<CAppState> State::state() {
     static auto state = makeShared<CAppState>();
@@ -28,6 +35,10 @@ CApp::CApp(glz::generic::object_t& object) {
         m_xwayland = object["xwayland"].get_boolean();
     if (object.contains("pid"))
         m_pid = sc<int64_t>(object["pid"].get_number());
+}
+
+CApp::CApp(const std::string& name, int pid) : m_class(name), m_pid(pid), m_alwaysUsePid(true) {
+    ;
 }
 
 void CApp::quit() {
@@ -80,6 +91,8 @@ bool CApp::operator==(const glz::generic& object) const {
 }
 
 bool CAppState::init() {
+
+    // windows
     {
         const auto RET = HyprlandIPC::getFromSocket("j/clients");
 
@@ -102,10 +115,9 @@ bool CAppState::init() {
         for (auto& el : jsonArr) {
             m_apps.emplace_back(makeUnique<CApp>(el.get_object()));
         }
-
-        g_logger->log(LOG_DEBUG, "Parsed {} apps from socket", m_apps.size());
     }
 
+    // layers
     {
         const auto RET = HyprlandIPC::getFromSocket("j/layers");
 
@@ -130,6 +142,50 @@ bool CAppState::init() {
         }
 
         g_logger->log(LOG_DEBUG, "Parsed {} apps from socket", m_apps.size());
+    }
+
+    // children of the Hyprland process
+    // TODO: make a kernel cgroup in hl. This can miss things.
+    // Maybe keep this for BSDs, which don't do cgroups, once we figure out PPid on BSDs.
+    {
+        const auto INSTANCES = HyprlandIPC::instances();
+        const auto HIS       = getenv("HYPRLAND_INSTANCE_SIGNATURE");
+
+        if (HIS && HIS[0] != '\0') {
+
+            const HyprlandIPC::SInstanceData* instance = nullptr;
+
+            for (const auto& I : INSTANCES) {
+                if (I.id != HIS)
+                    continue;
+
+                instance = &I;
+                break;
+            }
+
+            if (!instance)
+                g_logger->log(LOG_ERR, "Can't get children: no instance??");
+            else {
+                // get all processes that have a PPid of us
+                const auto PROCS = OS::getAllPids();
+
+                for (const auto& pid : PROCS) {
+
+                    // check if child
+                    if (OS::ppidOf(pid) != instance->pid)
+                        continue;
+
+                    const auto NAME = OS::appNameForPid(pid);
+
+                    if (std::ranges::contains(IGNORE_DAEMONS, NAME))
+                        continue;
+
+                    m_apps.emplace_back(makeUnique<CApp>(NAME, pid));
+                }
+            }
+
+        } else
+            g_logger->log(LOG_ERR, "Can't get children: no HIS");
     }
 
     // exit them if not dry run

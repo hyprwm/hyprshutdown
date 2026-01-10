@@ -3,6 +3,7 @@
 #include "state/AppState.hpp"
 
 #include <csignal>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <hyprutils/cli/ArgumentParser.hpp>

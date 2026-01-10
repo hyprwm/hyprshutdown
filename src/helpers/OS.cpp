@@ -44,11 +44,22 @@ static std::optional<std::string> linuxExtractFromStatus(std::ifstream& ifs, con
 
 std::string OS::appNameForPid(int64_t pid) {
 #if defined(KERN_PROC_PID)
-    struct kinfo_proc* kp = kinfo_getproc(pid);
-    if (!kp)
-        return "";
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(pid)};
+    KINFO_PROC kp;
+    size_t len = sizeof(kp);
 
-    return kp->ki_comm;
+    if (sysctl(mib, 4, &kp, &len, nullptr, 0) == -1) {
+        return "";
+    }
+    if (len == 0) {
+        return "";
+    }
+
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+    return kp.ki_comm;
+#elif defined(__NetBSD__) || defined(__OpenBSD__)
+    return kp.p_comm;
+#endif
 #else
     std::string   dir = "/proc/" + std::to_string(pid) + "/status";
     std::ifstream ifs(dir);

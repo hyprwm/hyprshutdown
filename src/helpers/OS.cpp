@@ -113,7 +113,7 @@ int64_t OS::ppidOf(int64_t pid) {
     u_int      miblen = sizeof(mib) / sizeof(mib[0]);
     KINFO_PROC kp;
     size_t     sz = sizeof(KINFO_PROC);
-    if (sysctl(mib, miblen, &kp, &sz, NULL, 0) != -1)
+    if (sysctl(mib, miblen, &kp, &sz, nullptr, 0) != -1)
         return KP_PPID(kp);
 #else
     std::string   dir = "/proc/" + std::to_string(pid) + "/status";

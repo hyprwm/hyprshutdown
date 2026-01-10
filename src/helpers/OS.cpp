@@ -44,7 +44,7 @@ static std::optional<std::string> linuxExtractFromStatus(std::ifstream& ifs, con
 
 std::string OS::appNameForPid(int64_t pid) {
 #if defined(KERN_PROC_PID)
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(pid)};
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, Hyprutils::Memory::sc<int>(pid)};
     KINFO_PROC kp;
     size_t len = sizeof(kp);
 

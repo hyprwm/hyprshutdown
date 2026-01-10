@@ -74,7 +74,7 @@ std::vector<int64_t> OS::getAllPids() {
 
     procs.resize(len / sizeof(kinfo_proc));
 
-    if (sysctl(mib, 4, procs, &len, nullptr, 0) == -1)
+    if (sysctl(mib, 4, procs.data(), &len, nullptr, 0) == -1)
         return {};
 
     pids.reserve(procs.size());

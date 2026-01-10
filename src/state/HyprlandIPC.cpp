@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <charconv>
+#include <csignal>
 
 #include <hyprutils/memory/Casts.hpp>
 

@@ -4,6 +4,7 @@
 #include <fstream>
 
 #include <hyprutils/string/String.hpp>
+#include <hyprutils/memory/Casts.hpp>
 
 #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #include <sys/sysctl.h>
@@ -48,12 +49,10 @@ std::string OS::appNameForPid(int64_t pid) {
     KINFO_PROC kp;
     size_t len = sizeof(kp);
 
-    if (sysctl(mib, 4, &kp, &len, nullptr, 0) == -1) {
+    if (sysctl(mib, 4, &kp, &len, nullptr, 0) == -1)
         return "";
-    }
-    if (len == 0) {
+    if (len == 0)
         return "";
-    }
 
 #if defined(__FreeBSD__) || defined(__DragonFly__)
     return kp.ki_comm;

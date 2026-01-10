@@ -124,7 +124,13 @@ bool CAppState::init() {
         for (auto& [m, obj] : jsonRaw->get_object()) {
             for (auto& [m2, obj2] : obj["levels"].get_object()) {
                 for (auto& el : obj2.get_array()) {
-                    m_apps.emplace_back(makeUnique<CApp>(el.get_object()));
+                    auto layerApp = makeUnique<CApp>(el.get_object());
+                    if (layerApp->m_pid > 0) {
+                        const bool seenPid = std::ranges::any_of(m_apps, [&layerApp](const auto& app) { return app->m_pid == layerApp->m_pid; });
+                        if (seenPid)
+                            continue;
+                    }
+                    m_apps.emplace_back(std::move(layerApp));
                 }
             }
         }

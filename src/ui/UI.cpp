@@ -19,7 +19,7 @@ namespace {
     constexpr float kButtonCharWidthFactor = 0.6F;
     constexpr float kAppListItemHeight     = 64.F;
     constexpr float kAppListPadding        = 4.F;
-    constexpr float kAppListLeftPadding    = 16.F;
+    constexpr float kAppListLeftPadding    = 24.F;
 
     float           buttonWidthForLabel(std::string_view label, float padding, float fontSize) {
         const float textWidth = static_cast<float>(label.size()) * (fontSize * kButtonCharWidthFactor);
@@ -52,24 +52,38 @@ namespace {
 CUI::CUI()  = default;
 CUI::~CUI() = default;
 
-CMonitorState::SAppListApp::SAppListApp(const std::string_view& clazz, const std::string_view& title) {
+CMonitorState::SAppListApp::SAppListApp(const std::string_view& clazz, const std::string_view& title, bool alternate) {
+    const bool hasTitle = !title.empty();
+
     m_null =
         Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, kAppListItemHeight}})->commence();
+
+    m_bg = Hyprtoolkit::CRectangleBuilder::begin()
+               ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {1.F, 1.F}})
+               ->color([alternate] {
+                   auto col = alternate ? g_ui->backend()->getPalette()->m_colors.alternateBase : g_ui->backend()->getPalette()->m_colors.base;
+                   col.a *= alternate ? 0.28F : 0.20F;
+                   return col;
+               })
+               ->rounding(0)
+               ->commence();
     m_row = Hyprtoolkit::CRowLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {1.F, 1.F}})->gap(0)->commence();
     m_leftPad =
         Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {kAppListLeftPadding, 1.F}})->commence();
     m_layout =
-        Hyprtoolkit::CColumnLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {1.F, 1.F}})->gap(10)->commence();
+        Hyprtoolkit::CColumnLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {1.F, 1.F}})->gap(4)->commence();
 
-    m_title = Hyprtoolkit::CTextBuilder::begin()
-                  ->text(std::format("<i>{}</i>", title))
-                  ->color([] {
-                      auto col = g_ui->backend()->getPalette()->m_colors.text;
-                      col.a *= 0.75F;
-                      return col;
-                  })
-                  ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_TEXT})
-                  ->commence();
+    if (hasTitle) {
+        m_title = Hyprtoolkit::CTextBuilder::begin()
+                      ->text(std::format("<i>{}</i>", title))
+                      ->color([] {
+                          auto col = g_ui->backend()->getPalette()->m_colors.text;
+                          col.a *= 0.75F;
+                          return col;
+                      })
+                      ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_TEXT})
+                      ->commence();
+    }
 
     m_class = Hyprtoolkit::CTextBuilder::begin()
                   ->text(std::string{clazz})
@@ -78,24 +92,27 @@ CMonitorState::SAppListApp::SAppListApp(const std::string_view& clazz, const std
                   ->commence();
 
     m_titleNull = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->commence();
-    m_classNull = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->commence();
+    m_classNull = Hyprtoolkit::CNullBuilder::begin()
+                      ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, hasTitle ? Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO : Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {1, 1}})
+                      ->commence();
 
-    m_class->setPositionMode(Hyprtoolkit::IElement::HT_POSITION_ABSOLUTE);
-    m_class->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_LEFT, true);
-    m_class->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_VCENTER, true);
+    if (!hasTitle) {
+        m_class->setPositionMode(Hyprtoolkit::IElement::HT_POSITION_ABSOLUTE);
+        m_class->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_LEFT, true);
+        m_class->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_VCENTER, true);
+    }
 
-    m_title->setPositionMode(Hyprtoolkit::IElement::HT_POSITION_ABSOLUTE);
-    m_title->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_LEFT, true);
-    m_title->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_VCENTER, true);
-
-    m_titleNull->addChild(m_title);
+    if (hasTitle)
+        m_titleNull->addChild(m_title);
     m_classNull->addChild(m_class);
 
     m_layout->addChild(m_classNull);
-    m_layout->addChild(m_titleNull);
+    if (hasTitle)
+        m_layout->addChild(m_titleNull);
 
     m_row->addChild(m_leftPad);
     m_row->addChild(m_layout);
+    m_null->addChild(m_bg);
     m_null->addChild(m_row);
 }
 
@@ -159,7 +176,7 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
                           ->commence();
 
     m_appListLayout =
-        Hyprtoolkit::CColumnLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->gap(8)->commence();
+        Hyprtoolkit::CColumnLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->gap(0)->commence();
 
     m_buttonLayout =
         Hyprtoolkit::CRowLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->gap(5)->commence();
@@ -212,9 +229,11 @@ void CMonitorState::update() {
         Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {1.F, kAppListPadding}})->commence();
     m_appListLayout->addChild(topPad);
 
+    size_t index = 0;
     for (const auto& APP : APPS) {
-        m_apps.emplace_back(makeUnique<SAppListApp>(APP->m_class, APP->m_title));
+        m_apps.emplace_back(makeUnique<SAppListApp>(APP->m_class, APP->m_title, (index % 2) == 1));
         m_appListLayout->addChild(m_apps.back()->m_null);
+        ++index;
     }
 
     auto bottomPad =

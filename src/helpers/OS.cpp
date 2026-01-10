@@ -65,7 +65,7 @@ std::vector<int64_t> OS::getAllPids() {
     std::vector<int64_t> pids;
 
 #if defined(KERN_PROC_PID)
-    int                     mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, NULL};
+    int                     mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
     size_t                  len    = 0;
     std::vector<kinfo_proc> procs;
 

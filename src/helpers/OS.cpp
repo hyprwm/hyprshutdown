@@ -4,6 +4,7 @@
 #include <fstream>
 
 #include <hyprutils/string/String.hpp>
+#include <hyprutils/memory/Casts.hpp>
 
 #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #include <sys/sysctl.h>
@@ -44,11 +45,20 @@ static std::optional<std::string> linuxExtractFromStatus(std::ifstream& ifs, con
 
 std::string OS::appNameForPid(int64_t pid) {
 #if defined(KERN_PROC_PID)
-    struct kinfo_proc* kp = kinfo_getproc(pid);
-    if (!kp)
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, Hyprutils::Memory::sc<int>(pid)};
+    KINFO_PROC kp;
+    size_t len = sizeof(kp);
+
+    if (sysctl(mib, 4, &kp, &len, nullptr, 0) == -1)
+        return "";
+    if (len == 0)
         return "";
 
-    return kp->ki_comm;
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+    return kp.ki_comm;
+#elif defined(__NetBSD__) || defined(__OpenBSD__)
+    return kp.p_comm;
+#endif
 #else
     std::string   dir = "/proc/" + std::to_string(pid) + "/status";
     std::ifstream ifs(dir);
@@ -65,7 +75,7 @@ std::vector<int64_t> OS::getAllPids() {
     std::vector<int64_t> pids;
 
 #if defined(KERN_PROC_PID)
-    int                     mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, NULL};
+    int                     mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
     size_t                  len    = 0;
     std::vector<kinfo_proc> procs;
 
@@ -74,7 +84,7 @@ std::vector<int64_t> OS::getAllPids() {
 
     procs.resize(len / sizeof(kinfo_proc));
 
-    if (sysctl(mib, 4, procs, &len, nullptr, 0) == -1)
+    if (sysctl(mib, 4, procs.data(), &len, nullptr, 0) == -1)
         return {};
 
     pids.reserve(procs.size());
@@ -113,7 +123,7 @@ int64_t OS::ppidOf(int64_t pid) {
     u_int      miblen = sizeof(mib) / sizeof(mib[0]);
     KINFO_PROC kp;
     size_t     sz = sizeof(KINFO_PROC);
-    if (sysctl(mib, miblen, &kp, &sz, NULL, 0) != -1)
+    if (sysctl(mib, miblen, &kp, &sz, nullptr, 0) != -1)
         return KP_PPID(kp);
 #else
     std::string   dir = "/proc/" + std::to_string(pid) + "/status";

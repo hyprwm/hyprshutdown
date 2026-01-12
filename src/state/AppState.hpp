@@ -11,6 +11,7 @@ namespace State {
     class CApp {
       public:
         CApp(glz::generic::object_t& object);
+        CApp(const std::string& name, int pid);
         ~CApp() = default;
 
         CApp(const CApp&) = delete;

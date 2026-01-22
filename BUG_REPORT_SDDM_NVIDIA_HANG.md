@@ -2,781 +2,195 @@
 
 **Date:** 2026-01-22  
 **Branch:** `investigate/sddm-nvidia-hang-fix`  
-**Reporter:** Investigation conducted via code analysis  
-**Status:** Under Investigation / Testing Required
-
----
-
-## Table of Contents
-
-1. [Executive Summary](#executive-summary)
-2. [Environment Details](#environment-details)
-3. [Problem Description](#problem-description)
-4. [Codebase Architecture Overview](#codebase-architecture-overview)
-5. [General Bugs Found](#general-bugs-found)
-6. [SDDM+NVIDIA Specific Issues](#sddmnvidia-specific-issues)
-7. [Root Cause Analysis](#root-cause-analysis)
-8. [Implemented Fixes](#implemented-fixes)
-9. [Files Modified](#files-modified)
-10. [Testing Instructions](#testing-instructions)
-11. [Additional Investigation Areas](#additional-investigation-areas)
-12. [References](#references)
+**Status:** ✅ RESOLVED
 
 ---
 
 ## Executive Summary
 
-hyprshutdown works correctly on systems using greetd+tuigreet but hangs during logout when using SDDM display manager, particularly on systems with NVIDIA GPUs. This investigation identified several potential causes including:
+hyprshutdown (and Hyprland in general) appeared to "hang" during logout when using SDDM display manager with NVIDIA GPUs. After systematic investigation and testing, the **actual root cause** was identified:
 
-- **Exit sequence ordering** that may cause NVIDIA driver GPU context cleanup to block
-- **Double-fork daemon pattern** that escapes systemd-logind session tracking
-- **Socket file descriptor leaks** in IPC communication
-- **Missing validation** for edge cases in app termination
+**The display doesn't automatically switch back to SDDM's virtual terminal (VT) when Hyprland exits on NVIDIA systems.**
 
-A fix branch has been created with proposed solutions for testing.
+The fix is simple: explicitly switch VTs after Hyprland exits using the new `--vt` flag.
 
 ---
 
-## Environment Details
+## Environment
 
-### Working Configuration (Laptop)
-- **Display Manager:** sddm catpuccin custom theme
-- **GPU:** Integrated (non-NVIDIA)
-- **Greeter Theme:** Catppuccin sugar-dark-custom (alternate jpg and greeting)
-- **Result:** ✅ Works flawlessly
+### Failing Configuration
+- **Display Manager:** SDDM
+- **GPU:** NVIDIA (proprietary driver)
+- **Result:** ❌ Black screen after logout (Ctrl+Alt+F2 restores SDDM)
 
-### Failing Configuration (Desktop)
-- **Display Manager:** SDDM 
-- **GPU:** NVIDIA (proprietary driver assumed)
-- **Greeter Theme:** Catppuccin sugar-dark-custom
-- **Result:** ❌ Hangs on logout (force to sddm with ctl+alt+f2, then works again)
-
-### Workaround in use during testing (Desktop)
+### Working Configuration  
 - **Display Manager:** greetd + tuigreet
-- **GPU:** NVIDIA (proprietary driver assumed)
-- **Greeter Theme:** tuigreet
-- **Result:** ✅ Works flawlessly
-
----
-
-## Problem Description
-
-When running `hyprshutdown` on a system with:
-- SDDM as the display manager
-- NVIDIA GPU with proprietary drivers
-
-The application hangs during the logout/shutdown sequence. The system does not complete the logout process and appears to freeze. This results in a black screen that must be forced back to sddm with ctl+alt+f2/f3. f2 successfully loads to my sddm greeter, f3 to tty.
-
-**Expected Behavior:** All applications close gracefully, Hyprland exits, and control returns to SDDM greeter.
-
-**Actual Behavior:** The process hangs indefinitely during logout. Specific hang point unknown without runtime debugging. Investigated in tty, found abandoned (orphaned session). This results in sddm to never load. ctl+alt+f2 reconnects to session and thus allows for proper login. 
-
----
-
-## Codebase Architecture Overview
-
-### Application Flow
-
-```
-main.cpp
-    │
-    ├── Parse arguments
-    ├── Check HYPRLAND_INSTANCE_SIGNATURE
-    ├── forkoff() ──────────────────────────────┐
-    │       │                                    │
-    │       ├── fork() + exit parent            │
-    │       ├── setsid() ← Creates new session  │ ◄── POTENTIAL ISSUE #1
-    │       ├── signal(SIGHUP, SIG_IGN)         │
-    │       └── fork() + exit parent            │
-    │                                           │
-    ├── State::state()->init() ─────────────────┤
-    │       │                                    │
-    │       ├── Get clients via IPC             │
-    │       ├── Get layers via IPC              │
-    │       ├── Get child processes (PPid)      │
-    │       └── Send quit() to all apps         │
-    │                                           │
-    └── g_ui->run() ────────────────────────────┤
-            │                                    │
-            ├── Create hyprtoolkit backend      │
-            ├── Register outputs (monitors)     │
-            ├── Create layer shell windows      │
-            ├── Set 150ms timer for updates     │
-            │                                    │
-            └── On all apps closed:             │
-                    │                            │
-                    └── CUI::exit() ────────────┤
-                            │                    │
-                            ├── Clear UI states │
-                            ├── Add idle callback│
-                            │       │            │
-                            │       ├── Destroy backend ◄── POTENTIAL ISSUE #2
-                            │       └── IPC: /dispatch exit
-                            │                    │
-                            └── (process ends)  │
-```
-
-### Key Components
-
-| File | Purpose |
-|------|---------|
-| `src/main.cpp` | Entry point, argument parsing, fork/daemonization |
-| `src/ui/UI.cpp` | UI management, layer shell windows, exit sequence |
-| `src/ui/UI.hpp` | UI class definitions |
-| `src/state/AppState.cpp` | Application tracking, SIGTERM/closewindow logic |
-| `src/state/AppState.hpp` | App state class definitions |
-| `src/state/HyprlandIPC.cpp` | Hyprland socket communication |
-| `src/state/HyprlandIPC.hpp` | IPC function declarations |
-| `src/helpers/OS.cpp` | Process enumeration, PID/PPid queries |
-
----
-
-## General Bugs Found
-
-### Bug #1: Socket File Descriptor Leak
-
-**Location:** `src/state/HyprlandIPC.cpp`, lines 68-74
-
-**Description:** When `connect()` or `write()` fails, the socket file descriptor is never closed, causing a resource leak.
-
-**Original Code:**
-```cpp
-if (connect(SERVERSOCKET, rc<sockaddr*>(&serverAddress), SUN_LEN(&serverAddress)) < 0)
-    return std::unexpected(std::format("couldn't connect to the hyprland socket at {}", socketPath));
-
-auto sizeWritten = write(SERVERSOCKET, cmd.c_str(), cmd.length());
-
-if (sizeWritten < 0)
-    return std::unexpected("couldn't write (4)");
-```
-
-**Impact:** File descriptor exhaustion over time; unlikely to cause immediate hang but is a correctness issue.
-
-**Severity:** Low (general bug)
-
----
-
-### Bug #2: Missing Validation in CApp::quit()
-
-**Location:** `src/state/AppState.cpp`, lines 44-60
-
-**Description:** The `quit()` method could attempt operations on apps with empty addresses or invalid PIDs without proper validation.
-
-**Original Code:**
-```cpp
-void CApp::quit() {
-    if (!m_alwaysUsePid && (!m_address.empty() || m_pid <= 0)) {
-        // Could proceed with empty address
-        auto ret = HyprlandIPC::getFromSocket(std::format("/dispatch closewindow address:{}", m_address));
-        // ...
-    } else {
-        // Could proceed with invalid m_pid
-        if (::kill(m_pid, SIGTERM) != 0)
-            // ...
-    }
-}
-```
-
-**Impact:** Could send malformed IPC commands or signal operations on invalid PIDs.
-
-**Severity:** Low-Medium (could cause unexpected behavior)
-
----
-
-### Bug #3: Potential Dereference After Error Check
-
-**Location:** `src/state/AppState.cpp`, lines 49-53
-
-**Original Code:**
-```cpp
-auto ret = HyprlandIPC::getFromSocket(...);
-if (!ret)
-    g_logger->log(LOG_ERR, "Failed closing window {}: ipc err", m_class);
-
-if (*ret != "ok")  // ← Dereferences ret even if previous check failed!
-    g_logger->log(LOG_ERR, "Failed closing window {}: {}", m_class, *ret);
-```
-
-**Impact:** Potential undefined behavior if `ret` is in error state.
-
-**Severity:** Medium (logic error)
-
----
-
-## SDDM+NVIDIA Specific Issues
-
-### Issue #1: Exit Sequence Order (HIGH PRIORITY)
-
-**Location:** `src/ui/UI.cpp`, `CUI::exit()` method
-
-**Description:** The original exit sequence was:
-1. Clear UI states (RAII destroys windows)
-2. Schedule idle callback
-3. **Destroy hyprtoolkit backend** (releases EGL/GL contexts)
-4. Send `/dispatch exit` to Hyprland
-
-**Why This Causes NVIDIA Hangs:**
-
-NVIDIA proprietary drivers maintain GPU context tied to the Wayland client connection. When the backend is destroyed:
-
-1. EGL context teardown begins
-2. NVIDIA driver attempts to sync pending GPU operations
-3. **The compositor (Hyprland) is still running and may have pending frames**
-4. Driver blocks waiting for GPU sync that depends on compositor
-5. Result: **Deadlock**
-
-With other drivers (Intel, AMD), the cleanup is more forgiving and doesn't block.
-
-**Evidence:** This is a known and documented pattern with NVIDIA on Wayland:
-
-| Source | Key Finding |
-|--------|-------------|
-| [Hyprland Wiki - NVIDIA](https://wiki.hyprland.org/Nvidia/) | Official documentation acknowledging NVIDIA-specific issues with Hyprland, including explicit sync requirements and known quirks |
-| [Issue #4399: loginctl terminate-session crashes SDDM](https://github.com/hyprwm/Hyprland/issues/4399) | Session termination causes Hyprland to exit with status 1, crashing SDDM helper - directly relevant to logout hang |
-| [Issue #7576: Graceful exit/logout dispatcher](https://github.com/hyprwm/Hyprland/issues/7576) | The `exit` dispatcher forcefully kills apps without graceful shutdown; `systemctl logout` works but Hyprland's exit leaves sessions incomplete |
-| [Issue #3558: Random hang on exit](https://github.com/hyprwm/Hyprland/issues/3558) | Documents unpredictable hangs during compositor shutdown where processes remain blocked |
-| [Issue #8680: Hyprland freezes with NVIDIA 565 + SDDM](https://github.com/hyprwm/Hyprland/issues/8680) | NVIDIA driver 565+ with Aquamarine 0.5.0 causes freeze on startup via SDDM, indicating GPU init/cleanup conflicts |
-| [Issue #8752: System crashes to SDDM with NVIDIA](https://github.com/hyprwm/Hyprland/issues/8752) | RTX 4080 users report random SDDM crashes, suggesting GPU resource handling issues during session transitions |
-| [Arch Forums: NVIDIA + SDDM problems](https://bbs.archlinux.org/viewtopic.php?id=295481) | Community reports of widespread SDDM+NVIDIA compatibility issues affecting session management |
-
-**Summary of Evidence:** These sources establish that:
-1. SDDM + NVIDIA session management is a known problem area
-2. Hyprland's exit behavior can crash SDDM
-3. GPU context cleanup during shutdown is problematic on NVIDIA
-4. The issue affects both startup and shutdown sequences
-
----
-
-### Issue #2: Double-Fork Session Escape (MEDIUM PRIORITY)
-
-**Location:** `src/main.cpp`, `forkoff()` function
-
-**Description:** The double-fork daemon pattern includes `setsid()` which creates a new session:
-
-```cpp
-static void forkoff() {
-    pid_t pid = fork();
-    // ...
-    if (setsid() < 0)  // ← Creates NEW session
-        exit(EXIT_FAILURE);
-    // ...
-}
-```
-
-**Why This May Cause SDDM Hangs:**
-
-1. SDDM uses systemd-logind for session management
-2. User sessions are tracked via cgroups (e.g., `session-N.scope`)
-3. `setsid()` creates a new session, potentially moving hyprshutdown **outside** the login session's cgroup
-4. When SDDM/logind waits for session cleanup, it may not see hyprshutdown
-5. But hyprshutdown is still holding Wayland/GPU resources
-6. Result: **SDDM waits for session to end, but resources aren't released**
-
-**Why I believe this is my issue:**
-- From TTY, I found **two sessions** after using hyprshutdown:
-  - One: user at seat0 (the original login session)
-  - One: **unmanaged** (orphaned session created by `setsid()`)
-- This orphaned session holds GPU/Wayland resources but SDDM doesn't track it
-- SDDM waits for seat0 session to fully terminate, but the orphaned session blocks cleanup
-- Ctrl+Alt+F2 reconnects to the seat0 session, bypassing the orphaned one
-
-**Verification Commands:**
-```bash
-# Check for orphaned sessions after hang
-loginctl list-sessions
-# Look for sessions with "State: closing" or no seat assignment
-
-# Check process tree
-ps auxf | grep -E '(hyprshutdown|hyprland)'
-```
-
-**Why greetd Works:**
-greetd uses a different session management model:
-1. greetd doesn't rely on systemd-logind's seat tracking as heavily
-2. tuigreet runs in TTY, not Wayland, so GPU resource cleanup is simpler
-3. greetd may be more tolerant of processes escaping the session cgroup
-
-**Priority Elevation:** Based on this evidence, **Issue #2 should be considered HIGH PRIORITY** alongside Issue #1, as it directly explains the observed orphaned session behavior.
-
----
-
-### Issue #3: No Explicit Window Unmapping
-
-**Location:** `src/ui/UI.cpp`
-
-**Description:** Layer shell windows are destroyed implicitly via RAII when `m_states.clear()` is called. There's no explicit:
-1. Unmap surface
-2. Commit
-3. Wait for server acknowledgment
-
-NVIDIA drivers can hang if wl_surface destruction races with pending GPU operations.
-
----
-
-### Issue #4: 5-Second IPC Timeout During Exit
-
-**Location:** `src/state/HyprlandIPC.cpp`, line 55
-
-```cpp
-auto t = timeval{.tv_sec = 5, .tv_usec = 0};
-setsockopt(SERVERSOCKET, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof(struct timeval));
-```
-
-During the exit sequence, if Hyprland's socket is in a degraded state (common during shutdown), this 5-second timeout adds to perceived hang time.
+- **GPU:** NVIDIA (same system)
+- **Result:** ✅ Works (greetd uses TTY, no VT switching needed)
 
 ---
 
 ## Root Cause Analysis
 
-### Most Likely Cause: Exit Sequence Order
+### Initial Hypotheses (DISPROVEN)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     ORIGINAL SEQUENCE                            │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Clear UI states                                              │
-│  2. Destroy backend (EGL cleanup)  ◄── NVIDIA BLOCKS HERE       │
-│  3. Send /dispatch exit to Hyprland                              │
-│                                                                  │
-│  Problem: Hyprland is still running when we try to cleanup      │
-│           NVIDIA driver waits for compositor which is waiting   │
-│           for... nothing. Deadlock.                              │
-└─────────────────────────────────────────────────────────────────┘
+During investigation, several potential causes were identified:
 
-┌─────────────────────────────────────────────────────────────────┐
-│                     FIXED SEQUENCE                               │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Explicitly close windows                                     │
-│  2. Clear UI states                                              │
-│  3. Send /dispatch exit to Hyprland  ◄── Compositor starts exit │
-│  4. Destroy backend (EGL cleanup)    ◄── Compositor already     │
-│                                          shutting down, no block │
-└─────────────────────────────────────────────────────────────────┘
-```
+| Hypothesis | Status | Evidence |
+|------------|--------|----------|
+| Exit sequence ordering (EGL cleanup before Hyprland exit) | ❌ Disproven | Reordering didn't fix the issue |
+| Session tracking (double-fork creating orphaned sessions) | ❌ Disproven | `--no-fork` alone didn't fix the issue |
+| Socket file descriptor leaks | ❌ Unrelated | Fixed for code quality, but not the cause |
+| Missing validation in quit() | ❌ Unrelated | Fixed for code quality, but not the cause |
 
-### Confirmed Cause: Session Tracking (Orphaned Session)
+### Actual Root Cause (CONFIRMED)
 
-**ELEVATED TO HIGH PRIORITY** based on user evidence:
+**Virtual Terminal (VT) switching failure on NVIDIA + SDDM**
 
-The user observed **two sessions** after hyprshutdown hang:
-- Original session at seat0
-- **Orphaned unmanaged session** (created by `setsid()`)
+When Hyprland exits:
+1. Hyprland releases its VT (e.g., VT1)
+2. SDDM's greeter should activate on its VT (e.g., VT2)
+3. **On NVIDIA, this automatic VT switch doesn't happen**
+4. The display shows a black screen (stuck on released VT)
+5. Ctrl+Alt+F2 manually switches to SDDM's VT, restoring the greeter
 
-This confirms that `--no-fork` should be tested as a **primary fix candidate**:
-
-```bash
-# Test with no-fork to keep process in original session
-hyprshutdown --verbose --no-fork
-```
-
-If this resolves the issue, the solution is either:
-1. Remove the double-fork pattern entirely
-2. Use a different daemonization method that preserves session membership
-3. Explicitly re-join the original session after fork
+**Proof:** `hyprctl dispatch exit` (vanilla Hyprland, no hyprshutdown) exhibits the **exact same hang behavior**.
 
 ---
 
-## Implemented Fixes
+## Test Results
 
-### Fix #1: Socket Leak (HyprlandIPC.cpp)
+### Systematic Testing
 
-Added `close(SERVERSOCKET)` on error paths:
+| Test Case | Command | Result |
+|-----------|---------|--------|
+| Vanilla Hyprland exit | `hyprctl dispatch exit` | ❌ HANGS |
+| hyprshutdown default | `hyprshutdown` | ❌ HANGS |
+| With --no-fork | `hyprshutdown --no-fork` | ❌ HANGS |
+| With --vt 2 | `hyprshutdown --vt 2` | ✅ WORKS |
+| With --vt auto | `hyprshutdown --vt auto` | ✅ WORKS |
+| Combined | `hyprshutdown --no-fork --vt 2` | ✅ WORKS |
 
-```cpp
-if (connect(SERVERSOCKET, rc<sockaddr*>(&serverAddress), SUN_LEN(&serverAddress)) < 0) {
-    close(SERVERSOCKET);  // ← ADDED
-    return std::unexpected(...);
-}
+### Conclusions
 
-if (sizeWritten < 0) {
-    close(SERVERSOCKET);  // ← ADDED
-    return std::unexpected(...);
-}
-```
+1. **`--vt` is the ONLY required fix** for the NVIDIA+SDDM hang
+2. **`--no-fork` is NOT required** - session tracking was not the issue
+3. **Exit sequence reordering is NOT required** - helpful for code clarity but doesn't fix this issue
+4. **This affects ALL Hyprland exits on NVIDIA+SDDM**, not just hyprshutdown
 
-### Fix #2: Exit Sequence Reorder (UI.cpp)
+---
 
-Changed to send `/dispatch exit` **before** backend destruction:
+## The Fix
 
-```cpp
-void CUI::exit(bool closeHl) {
-    // Explicitly close windows first
-    for (auto& state : m_states) {
-        state->closeWindow();
-    }
-    g_ui->m_states.clear();
+### Implementation
 
-    g_ui->backend()->addIdle([this, closeHl] {
-        if (closeHl && !m_noExit && !State::state()->m_dryRun) {
-            // Tell Hyprland to exit FIRST
-            HyprlandIPC::getFromSocket("/dispatch exit");
-            // Then run post-exit command
-            if (m_postExitCmd) { ... }
-        }
-        
-        // THEN destroy backend (compositor already shutting down)
-        g_ui->m_backend->destroy();
-        g_ui->m_backend.reset();
-    });
-}
-```
-
-### Fix #3: Add --no-fork Option (main.cpp)
-
-New command-line flag to skip daemonization:
+Added `--vt` command-line option that performs an async VT switch after Hyprland exits:
 
 ```cpp
-ASSERT(parser.registerBoolOption("no-fork", "", 
-    "Do not fork/daemonize (may help with SDDM session tracking)"));
-
-// Later:
-if (!parser.getBool("no-fork").value_or(false)) {
-    forkoff();
-} else {
-    signal(SIGHUP, SIG_IGN);  // Still survive terminal disconnect
-}
-```
-
-### Fix #4: Validation in CApp::quit() (AppState.cpp)
-
-Added proper validation and fixed the error check logic:
-
-```cpp
-void CApp::quit() {
-    if (!m_alwaysUsePid && (!m_address.empty() || m_pid <= 0)) {
-        if (m_address.empty()) {
-            g_logger->log(LOG_WARN, "app {} has no address and no valid pid, skipping", m_class);
-            return;  // ← ADDED: Don't proceed with empty address
-        }
-        auto ret = HyprlandIPC::getFromSocket(...);
-        if (!ret)
-            g_logger->log(LOG_ERR, "...: {}", ret.error());
-        else if (*ret != "ok")  // ← FIXED: else if instead of separate if
-            g_logger->log(LOG_ERR, "...");
-    } else {
-        if (m_pid <= 0) {
-            g_logger->log(LOG_WARN, "app {} has invalid pid {}, skipping", m_class, m_pid);
-            return;  // ← ADDED: Don't signal invalid PID
-        }
-        // ...
+// In UI.cpp exit sequence
+if (vtSwitch) {
+    int targetVT = (*vtSwitch == "auto") ? detectGreeterVT() : std::stoi(*vtSwitch);
+    if (targetVT > 0) {
+        switchToVTAsync(targetVT);  // Uses CProcess::runAsync()
     }
 }
 ```
 
-### Fix #5: Added closeWindow() Method (UI.hpp/UI.cpp)
+**Critical detail:** The VT switch MUST be async (non-blocking). Synchronous VT switching via ioctl causes hangs because `VT_WAITACTIVE` blocks indefinitely on NVIDIA during compositor shutdown.
 
-New public method for explicit window closure:
+### User Setup Required
 
-```cpp
-// UI.hpp
-void closeWindow();
+The VT switch uses `sudo chvt`, which requires a sudoers rule:
 
-// UI.cpp
-void CMonitorState::closeWindow() {
-    if (m_window) {
-        g_logger->log(LOG_DEBUG, "Closing window for monitor {}", m_monitorName);
-        m_window->close();
-    }
-}
+```bash
+echo "username ALL=(ALL) NOPASSWD: /usr/bin/chvt" | sudo tee /etc/sudoers.d/chvt
+sudo chmod 440 /etc/sudoers.d/chvt
 ```
 
-### Fix #6: Comprehensive Debug Logging
+**Security note:** This is safe because `chvt` only switches virtual terminals and cannot be exploited for privilege escalation.
 
-Added LOG_DEBUG calls throughout exit sequence:
+### Usage
 
-```cpp
-g_logger->log(LOG_DEBUG, "CUI::exit called, closeHl={}", closeHl);
-g_logger->log(LOG_DEBUG, "Closing window for monitor {}", m_monitorName);
-g_logger->log(LOG_DEBUG, "Idle callback: preparing to exit");
-g_logger->log(LOG_DEBUG, "Sending Hyprland exit dispatch");
-g_logger->log(LOG_DEBUG, "Destroying backend");
-g_logger->log(LOG_DEBUG, "Exit complete");
+```bash
+# Explicit VT
+hyprshutdown --vt 2
+
+# Auto-detect (defaults to VT2 for SDDM)
+hyprshutdown --vt auto
 ```
+
+---
+
+## Code Quality Improvements (Bonus)
+
+While investigating, several code quality issues were identified and fixed. These are **NOT related to the SDDM hang** but improve the codebase:
+
+### 1. Socket FD Leak (HyprlandIPC.cpp)
+
+**Before:** Socket not closed on connect/write failure
+**After:** `close(SERVERSOCKET)` added to error paths
+
+### 2. Validation in CApp::quit() (AppState.cpp)
+
+**Before:** Could proceed with empty address or invalid PID
+**After:** Proper validation and early return with logging
+
+### 3. Error Check Logic (AppState.cpp)
+
+**Before:** `if (!ret) ... if (*ret != "ok")` - would dereference after error
+**After:** `if (!ret) ... else if (*ret != "ok")` - proper else-if chain
+
+### 4. Debug Logging (UI.cpp)
+
+Added comprehensive debug logging throughout the exit sequence for future troubleshooting.
 
 ---
 
 ## Files Modified
 
-| File | Changes |
-|------|---------|
-| `src/main.cpp` | Added `--no-fork` option with conditional fork logic |
-| `src/state/AppState.cpp` | Added validation, fixed error handling, improved logging |
-| `src/state/HyprlandIPC.cpp` | Fixed socket FD leak on error paths |
-| `src/ui/UI.cpp` | Reordered exit sequence, added explicit window close, added logging |
-| `src/ui/UI.hpp` | Added `closeWindow()` method declaration |
-
-### Diff Statistics
-
-```
- src/main.cpp              | 12 +++++++++++-
- src/state/AppState.cpp    | 15 ++++++++++----
- src/state/HyprlandIPC.cpp |  8 ++++++--
- src/ui/UI.cpp             | 50 +++++++++++++++++++++++++++++++++++++++++------
- src/ui/UI.hpp             |  1 +
- 5 files changed, 73 insertions(+), 13 deletions(-)
-```
+| File | Changes | Purpose |
+|------|---------|---------|
+| `src/main.cpp` | Added `--vt` option | **THE FIX** |
+| `src/ui/UI.cpp` | VT switch implementation, exit sequence improvements | **THE FIX** + code quality |
+| `src/ui/UI.hpp` | Added `m_vtSwitch` member | **THE FIX** |
+| `src/state/HyprlandIPC.cpp` | Socket FD leak fix | Code quality |
+| `src/state/AppState.cpp` | Validation fixes | Code quality |
+| `README.md` | Documentation for NVIDIA+SDDM users | Documentation |
 
 ---
 
-## Testing Instructions
+## Why greetd Works
 
-### Build the Fix Branch
+greetd + tuigreet works on the same NVIDIA system because:
 
-```bash
-# Clone or fetch the latest
-git fetch origin
-git checkout investigate/sddm-nvidia-hang-fix
-```
-
-#### For Arch Linux (CMake)
-
-```bash
-# Dependencies (if not already installed via Hyprland)
-# hyprtoolkit, hyprutils, pixman, libdrm should already be present
-
-# Build
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-
-# Install (optional, or just run from build dir)
-sudo make install
-
-# Or run directly from build directory
-./hyprshutdown --verbose
-```
-
-#### For NixOS
-
-```bash
-nix build
-./result/bin/hyprshutdown --verbose
-```
-
-### Test Scenarios
-
-#### Test 1: Verbose Mode (Identify Hang Point)
-
-```bash
-hyprshutdown --verbose
-```
-
-Watch the output. If it hangs, note the last log message - this identifies where the hang occurs.
-
-#### Test 2: No-Fork Mode (Test Session Tracking Theory)
-
-```bash
-hyprshutdown --verbose --no-fork
-```
-
-If this works but Test 1 doesn't, the issue is session/cgroup related.
-
-#### Test 3: Dry Run (Verify UI Works)
-
-```bash
-hyprshutdown --verbose --dry-run
-```
-
-This shows the UI without actually exiting anything. Useful to verify basic functionality.
-
-### Collect Debug Information
-
-If still hanging, collect:
-
-```bash
-# Journal logs
-journalctl -b | grep -iE '(hyprshutdown|nvidia|sddm|hyprland|egl|drm)' > ~/hyprshutdown_journal.log
-
-# Hyprland log
-cat ~/.local/share/hyprland/hyprland.log > ~/hyprland.log
-
-# System info
-nvidia-smi > ~/nvidia_info.txt
-hyprctl version >> ~/nvidia_info.txt
-```
-
----
-
-## UI Enhancement Proposal
-
-### Current UI Issues
-
-The current hyprshutdown UI feels **off-brand** compared to the polish and quality users expect from the Hyprland ecosystem:
-
-| Current State | Expected Hyprland Quality |
-|---------------|---------------------------|
-| Plain text list of app names | Visual cards with app icons |
-| No progress indication | Animated progress/spinner per app |
-| Static display | Smooth fade-out animations when apps close |
-| Basic class/title only | Status indicators (closing, waiting, hung) |
-| No visual hierarchy | Clear distinction between responsive vs unresponsive apps |
-| Generic styling | Respects user's Hyprland theme/colors with blur |
-
-### Proposed Enhancements
-
-#### 1. App Status Indicators
-```
-┌─────────────────────────────────────────┐
-│ 🟢 kitty          ~/WMS/hyprland        │  ← Closing normally
-│ 🟡 firefox        Saving session...     │  ← Waiting for user
-│ 🔴 code           Not responding        │  ← Hung (offer force close)
-└─────────────────────────────────────────┘
-```
-
-#### 2. Per-App Actions
-- Individual "Force Close" button for hung apps
-- Show time waiting for each app
-- Offer to skip waiting for specific apps
-
-#### 3. Visual Feedback
-- Fade-out animation when app closes
-- Subtle pulse animation on "waiting" apps
-- Progress bar or countdown for re-SIGTERM attempts
-- Background blur matching Hyprland aesthetic
-
-#### 4. Information Display
-- Show PID for debugging
-- Display app icon (if available via desktop files)
-- Show "Waiting X seconds..." counter
-- Display reason for delay (e.g., "Has unsaved changes")
-
-#### 5. Theme Integration
-- Respect Hyprland's configured colors
-- Support for blur (already using palette, but could enhance)
-- Consistent with hyprlock/hypridle aesthetic
-
-### Implementation Priority
-
-This is a **secondary concern** after fixing the SDDM hang issue, but would significantly improve user experience and align with Hyprland's quality standards.
-
----
-
-## Additional Investigation Areas
-
-If the implemented fixes don't resolve the issue, investigate:
-
-### 1. hyprtoolkit Backend Destruction
-
-The `m_backend->destroy()` call is opaque. May need to:
-- Check if hyprtoolkit does `wl_display_roundtrip()` during destruction
-- Verify EGL context cleanup order
-- Check for NVIDIA-specific code paths
-
-### 2. Wayland Protocol Compliance
-
-Verify that layer shell surfaces are being properly:
-1. Unmapped (set NULL buffer)
-2. Committed
-3. Destroyed only after server acknowledgment
-
-### 3. systemd-logind Integration
-
-Check if Hyprland properly registers with logind:
-```bash
-loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}')
-```
-
-### 4. NVIDIA-Specific Environment Variables
-
-Test with:
-```bash
-__GL_YIELD="USLEEP" hyprshutdown --verbose
-__GL_THREADED_OPTIMIZATIONS=0 hyprshutdown --verbose
-```
-
-### 5. DRM Explicit Sync
-
-Check Hyprland NVIDIA configuration:
-- Is `render:explicit_sync = true` set?
-- Is the kernel/driver version compatible?
+1. **tuigreet runs in a TTY** - No GPU/Wayland involvement
+2. **No VT switch needed** - Hyprland and greetd can share the same VT concept differently
+3. **Simpler display stack** - TTY doesn't have the same VT switching requirements
 
 ---
 
 ## References
 
-### Official Documentation
-- [Hyprland Wiki - NVIDIA](https://wiki.hyprland.org/Nvidia/) - Official NVIDIA setup and known issues
-- [systemd-logind Session Tracking](https://www.freedesktop.org/software/systemd/man/logind.conf.html) - Session management documentation
-- [Wayland Layer Shell Protocol](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) - Layer shell surface protocol spec
-
 ### Related Hyprland Issues
-- [Issue #4399: loginctl terminate-session crashes SDDM](https://github.com/hyprwm/Hyprland/issues/4399) - Session termination causing SDDM crashes
-- [Issue #7576: Graceful exit/logout dispatcher](https://github.com/hyprwm/Hyprland/issues/7576) - Feature request for proper graceful exit
-- [Issue #3558: Random hang on exit](https://github.com/hyprwm/Hyprland/issues/3558) - Documented exit hangs
-- [Issue #8680: NVIDIA 565 + SDDM freezes](https://github.com/hyprwm/Hyprland/issues/8680) - Recent NVIDIA driver freeze issues
-- [Issue #8752: System crashes to SDDM with NVIDIA](https://github.com/hyprwm/Hyprland/issues/8752) - RTX GPU session crash reports
+- [Issue #4399](https://github.com/hyprwm/Hyprland/issues/4399) - loginctl terminate-session crashes SDDM
+- [Issue #8680](https://github.com/hyprwm/Hyprland/issues/8680) - Hyprland freezes with NVIDIA 565 + SDDM
+- [Issue #8752](https://github.com/hyprwm/Hyprland/issues/8752) - System crashes to SDDM with NVIDIA
 
-### NVIDIA-Specific Resources
-- [NVIDIA EGL-Wayland Issues](https://github.com/NVIDIA/egl-wayland/issues) - NVIDIA's Wayland EGL layer issues
-- [Arch Forums: NVIDIA + SDDM problems](https://bbs.archlinux.org/viewtopic.php?id=295481) - Community troubleshooting
-
-### This Investigation
-- [hyprshutdown fix branch](https://github.com/Curious-Keeper/hyprshutdown/tree/investigate/sddm-nvidia-hang-fix) - Branch containing proposed fixes
+### Community Resources
+- [Arch Forums: NVIDIA + SDDM problems](https://bbs.archlinux.org/viewtopic.php?id=295481)
+- [Hyprland Wiki - NVIDIA](https://wiki.hyprland.org/Nvidia/)
 
 ---
 
-## Appendix: Original vs Fixed Code Comparison
+## Recommendation for Upstream
 
-### CUI::exit() - Before
+This fix should be considered for upstream hyprshutdown with the following notes:
 
-```cpp
-void CUI::exit(bool closeHl) {
-    g_ui->m_states.clear();
-
-    g_ui->backend()->addIdle([this, closeHl] {
-        g_ui->m_backend->destroy();
-        g_ui->m_backend.reset();
-
-        if (closeHl && !m_noExit && !State::state()->m_dryRun) {
-            HyprlandIPC::getFromSocket("/dispatch exit");
-            if (m_postExitCmd) {
-                CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
-                proc.runAsync();
-            }
-        }
-    });
-}
-```
-
-### CUI::exit() - After
-
-```cpp
-void CUI::exit(bool closeHl) {
-    g_logger->log(LOG_DEBUG, "CUI::exit called, closeHl={}", closeHl);
-
-    for (auto& state : m_states) {
-        state->closeWindow();
-    }
-    g_ui->m_states.clear();
-
-    g_ui->backend()->addIdle([this, closeHl] {
-        g_logger->log(LOG_DEBUG, "Idle callback: preparing to exit");
-
-        if (closeHl && !m_noExit && !State::state()->m_dryRun) {
-            g_logger->log(LOG_DEBUG, "Sending Hyprland exit dispatch");
-            auto postCmd = m_postExitCmd;
-            
-            auto ret = HyprlandIPC::getFromSocket("/dispatch exit");
-            if (!ret) {
-                g_logger->log(LOG_WARN, "Failed to send exit dispatch: {}", ret.error());
-            }
-
-            if (postCmd) {
-                g_logger->log(LOG_DEBUG, "Running post-exit command: {}", *postCmd);
-                CProcess proc("/bin/sh", {"-c", postCmd.value()});
-                proc.runAsync();
-            }
-        }
-
-        g_logger->log(LOG_DEBUG, "Destroying backend");
-        g_ui->m_backend->destroy();
-        g_ui->m_backend.reset();
-
-        g_logger->log(LOG_DEBUG, "Exit complete");
-    });
-}
-```
+1. **The `--vt` flag is the minimal required change** for NVIDIA+SDDM users
+2. **Auto-detection defaults to VT2** which is common for SDDM, but users can override
+3. **Requires user setup** (sudoers rule for chvt) - this should be documented
+4. **The `--no-fork` flag can be kept** for users who want foreground execution, but it's not required for this fix
 
 ---
 
-*End of Bug Report*
+*Investigation completed 2026-01-22*

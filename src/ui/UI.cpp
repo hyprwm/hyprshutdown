@@ -4,8 +4,6 @@
 #include "../state/HyprlandIPC.hpp"
 
 #include <algorithm>
-#include <thread>
-#include <chrono>
 
 #include <hyprtoolkit/core/Output.hpp>
 #include <hyprtoolkit/types/SizeType.hpp>
@@ -13,6 +11,22 @@
 #include <hyprutils/os/Process.hpp>
 
 using namespace Hyprutils::OS;
+
+namespace {
+    // Detect the greeter's VT (defaults to VT2 which is common for SDDM)
+    int detectGreeterVT() {
+        return 2;
+    }
+
+    // Switch to a specific VT asynchronously (non-blocking).
+    // Must be async - synchronous VT switching hangs on NVIDIA during compositor shutdown.
+    void switchToVTAsync(int vt) {
+        g_logger->log(LOG_DEBUG, "Scheduling async VT switch to VT{}", vt);
+        std::string cmd = std::format("sudo -n chvt {}", vt);
+        CProcess proc("/bin/sh", {"-c", cmd});
+        proc.runAsync();
+    }
+}
 
 namespace {
     using ButtonPtr                        = Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement>;
@@ -51,82 +65,42 @@ namespace {
 CUI::CUI()  = default;
 CUI::~CUI() = default;
 
-CMonitorState::SAppListApp::SAppListApp(const std::string_view& clazz, const std::string_view& title, int64_t pid, bool isXwayland) {
-    // Outer container with margin
-    m_null = Hyprtoolkit::CNullBuilder::begin()
-                 ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1.F, 1.F}})
-                 ->commence();
+CMonitorState::SAppListApp::SAppListApp(const std::string_view& clazz, const std::string_view& title) {
+    m_null = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1.F, 1.F}})->commence();
     m_null->setMargin(4);
+    m_layout =
+        Hyprtoolkit::CColumnLayoutBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1.F, 1.F}})->gap(2)->commence();
 
-    // Card background with subtle color and rounding
-    m_cardBg = Hyprtoolkit::CRectangleBuilder::begin()
-                   ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, {1, 1}})
-                   ->color([] {
-                       auto col = g_ui->backend()->getPalette()->m_colors.surface;
-                       col.a *= 0.6F;
-                       return col;
-                   })
-                   ->rounding(g_ui->backend()->getPalette()->m_vars.smallRounding)
-                   ->commence();
+    m_title = Hyprtoolkit::CTextBuilder::begin()
+                  ->text(std::format("<i>{}</i>", title))
+                  ->color([] { return g_ui->backend()->getPalette()->m_colors.text; })
+                  ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_TEXT})
+                  ->commence();
 
-    // Content container with padding
-    m_contentNull = Hyprtoolkit::CNullBuilder::begin()
-                        ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1.F, 1.F}})
-                        ->commence();
-    m_contentNull->setMargin(12);
-
-    // Horizontal layout for status indicator + text
-    m_rowLayout = Hyprtoolkit::CRowLayoutBuilder::begin()
-                      ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1.F, 1.F}})
-                      ->gap(12)
-                      ->commence();
-
-    // Status indicator (closing indicator)
-    std::string statusIcon = "●";  // Closing indicator
-    std::string statusColor = isXwayland ? "#f9e2af" : "#a6e3a1";  // Yellow for XWayland, green for native
-    m_status = Hyprtoolkit::CTextBuilder::begin()
-                   ->text(std::format("<span foreground=\"{}\">●</span>", statusColor))
-                   ->color([] { return g_ui->backend()->getPalette()->m_colors.text; })
-                   ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_H2})
-                   ->commence();
-
-    // Vertical layout for class + title
-    m_textLayout = Hyprtoolkit::CColumnLayoutBuilder::begin()
-                       ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1.F, 1.F}})
-                       ->gap(2)
-                       ->commence();
-
-    // App class name (bold/larger)
     m_class = Hyprtoolkit::CTextBuilder::begin()
                   ->text(std::string{clazz})
                   ->color([] { return g_ui->backend()->getPalette()->m_colors.text; })
                   ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_H3})
                   ->commence();
 
-    // App title with PID info (smaller, italicized)
-    std::string titleText = title.empty() ? "" : std::string{title};
-    std::string pidInfo = pid > 0 ? std::format(" <span alpha=\"60%\">(PID: {})</span>", pid) : "";
-    std::string xwaylandTag = isXwayland ? " <span foreground=\"#f9e2af\">[X11]</span>" : "";
-    m_title = Hyprtoolkit::CTextBuilder::begin()
-                  ->text(std::format("<i>{}</i>{}{}", titleText, pidInfo, xwaylandTag))
-                  ->color([] {
-                      auto col = g_ui->backend()->getPalette()->m_colors.text;
-                      col.a *= 0.8F;
-                      return col;
-                  })
-                  ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_TEXT})
-                  ->commence();
+    m_titleNull = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->commence();
+    m_classNull = Hyprtoolkit::CNullBuilder::begin()->size({Hyprtoolkit::CDynamicSize::HT_SIZE_PERCENT, Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, {1, 1}})->commence();
 
-    // Build the hierarchy
-    m_textLayout->addChild(m_class);
-    m_textLayout->addChild(m_title);
+    m_class->setPositionMode(Hyprtoolkit::IElement::HT_POSITION_ABSOLUTE);
+    m_class->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_LEFT, true);
+    m_class->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_VCENTER, true);
 
-    m_rowLayout->addChild(m_status);
-    m_rowLayout->addChild(m_textLayout);
+    m_title->setPositionMode(Hyprtoolkit::IElement::HT_POSITION_ABSOLUTE);
+    m_title->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_LEFT, true);
+    m_title->setPositionFlag(Hyprtoolkit::IElement::HT_POSITION_FLAG_VCENTER, true);
 
-    m_contentNull->addChild(m_rowLayout);
-    m_cardBg->addChild(m_contentNull);
-    m_null->addChild(m_cardBg);
+    m_titleNull->addChild(m_title);
+    m_classNull->addChild(m_class);
+
+    m_layout->addChild(m_classNull);
+    m_layout->addChild(m_titleNull);
+
+    m_null->addChild(m_layout);
 }
 
 CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(output->port()) {
@@ -163,8 +137,7 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
                     ->commence();
 
     m_subText = Hyprtoolkit::CTextBuilder::begin()
-                    ->text("Waiting for apps to close <span alpha=\"60%\">(0s elapsed)</span>\n"
-                           "<i>You can force quit Hyprland, but that risks losing unsaved progress.</i>")
+                    ->text("Waiting for your apps to exit.\n<i>You can force quit Hyprland, but that risks losing unsaved progress.</i>")
                     ->color([] { return g_ui->backend()->getPalette()->m_colors.text; })
                     ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_TEXT})
                     ->commence();
@@ -245,21 +218,9 @@ void CMonitorState::update() {
     m_appListLayout->clearChildren();
 
     const auto& APPS = State::state()->apps();
-    const auto  elapsed = static_cast<int>(State::state()->secondsPassed());
-
-    // Update subtitle with app count and elapsed time
-    if (APPS.empty()) {
-        m_subText->setText("All apps closed. Exiting...");
-    } else {
-        std::string appWord = APPS.size() == 1 ? "app" : "apps";
-        m_subText->setText(std::format(
-            "Waiting for <b>{}</b> {} to close <span alpha=\"60%\">({}s elapsed)</span>\n"
-            "<i>You can force quit Hyprland, but that risks losing unsaved progress.</i>",
-            APPS.size(), appWord, elapsed));
-    }
 
     for (const auto& APP : APPS) {
-        m_apps.emplace_back(makeUnique<SAppListApp>(APP->m_class, APP->m_title, APP->m_pid, APP->m_xwayland));
+        m_apps.emplace_back(makeUnique<SAppListApp>(APP->m_class, APP->m_title));
         m_appListLayout->addChild(m_apps.back()->m_null);
     }
 }
@@ -272,8 +233,7 @@ void CUI::registerOutput(const SP<Hyprtoolkit::IOutput>& mon) {
 void CUI::exit(bool closeHl) {
     g_logger->log(LOG_DEBUG, "CUI::exit called, closeHl={}", closeHl);
 
-    // First, explicitly close all windows to ensure layer surfaces are properly unmapped
-    // This helps prevent NVIDIA driver hangs by ensuring surfaces are gone before backend destruction
+    // Explicitly close windows before clearing state
     for (auto& state : m_states) {
         state->closeWindow();
     }
@@ -282,23 +242,32 @@ void CUI::exit(bool closeHl) {
     g_ui->backend()->addIdle([this, closeHl] {
         g_logger->log(LOG_DEBUG, "Idle callback: preparing to exit");
 
-        // For SDDM+NVIDIA compatibility: Send the Hyprland exit command BEFORE
-        // destroying our backend. This prevents potential GPU context issues where
-        // NVIDIA drivers block during EGL cleanup while Hyprland is still running.
         if (closeHl && !m_noExit && !State::state()->m_dryRun) {
             g_logger->log(LOG_DEBUG, "Sending Hyprland exit dispatch");
 
-            // Capture post-exit command before any cleanup
+            // Capture options before cleanup
+            auto vtSwitch = m_vtSwitch;
             auto postCmd = m_postExitCmd;
 
-            // Tell Hyprland to exit first - this will trigger compositor shutdown
-            // which is the natural cleanup order for Wayland clients
-            auto ret = HyprlandIPC::getFromSocket("/dispatch exit");
-            if (!ret) {
-                g_logger->log(LOG_WARN, "Failed to send exit dispatch: {}", ret.error());
+            //NOLINTNEXTLINE
+            HyprlandIPC::getFromSocket("/dispatch exit");
+
+            // VT switch for NVIDIA+SDDM: the display doesn't automatically switch
+            // back to the greeter's VT, causing a black screen. This fixes it.
+            if (vtSwitch) {
+                int targetVT = (*vtSwitch == "auto") ? detectGreeterVT() : 0;
+                if (targetVT == 0) {
+                    try {
+                        targetVT = std::stoi(*vtSwitch);
+                    } catch (...) {
+                        g_logger->log(LOG_WARN, "Invalid VT number: {}", *vtSwitch);
+                    }
+                }
+                if (targetVT > 0) {
+                    switchToVTAsync(targetVT);
+                }
             }
 
-            // Run post-exit command if specified
             if (postCmd) {
                 g_logger->log(LOG_DEBUG, "Running post-exit command: {}", *postCmd);
                 CProcess proc("/bin/sh", {"-c", postCmd.value()});
@@ -306,12 +275,9 @@ void CUI::exit(bool closeHl) {
             }
         }
 
-        // Now destroy our backend - Hyprland should already be shutting down
-        // so this cleanup should proceed without GPU contention
         g_logger->log(LOG_DEBUG, "Destroying backend");
         g_ui->m_backend->destroy();
         g_ui->m_backend.reset();
-
         g_logger->log(LOG_DEBUG, "Exit complete");
     });
 }
@@ -319,9 +285,7 @@ void CUI::exit(bool closeHl) {
 void CUI::setTimer() {
     // every 5 seconds or so, attempt to sigterm apps again
     static uint16_t          counter     = 0;
-    static uint16_t          uiCounter   = 0;
-    constexpr const uint16_t COUNTER_MAX = 30;  // ~4.5s at 150ms intervals
-    constexpr const uint16_t UI_UPDATE_INTERVAL = 7;  // ~1s at 150ms intervals
+    constexpr const uint16_t COUNTER_MAX = 30;
 
     m_updateTimer = m_backend->addTimer(
         std::chrono::milliseconds(150),
@@ -332,7 +296,6 @@ void CUI::setTimer() {
             }
 
             counter++;
-            uiCounter++;
 
             if (counter > COUNTER_MAX) {
                 g_logger->log(LOG_DEBUG, "Re-closing apps");
@@ -340,14 +303,13 @@ void CUI::setTimer() {
                 State::state()->reexitApps();
             }
 
-            bool stateChanged = State::state()->updateState();
-            bool shouldUpdateUI = stateChanged || (uiCounter >= UI_UPDATE_INTERVAL);
+            if (!State::state()->updateState()) {
+                setTimer();
+                return; // no changes
+            }
 
-            if (shouldUpdateUI) {
-                uiCounter = 0;
-                for (const auto& s : m_states) {
-                    s->update();
-                }
+            for (const auto& s : m_states) {
+                s->update();
             }
 
             setTimer();

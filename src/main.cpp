@@ -40,7 +40,8 @@ int main(int argc, const char** argv, const char** envp) {
     ASSERT(parser.registerStringOption("top-label", "t", "Set the text appearing on top (set to \"Shutting down...\" by default)"));
     ASSERT(parser.registerStringOption("post-cmd", "p", "Set a command ran after all apps and Hyprland shut down"));
     ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
-    ASSERT(parser.registerBoolOption("no-fork", "", "Do not fork/daemonize (may help with SDDM session tracking)"));
+    ASSERT(parser.registerBoolOption("no-fork", "", "Do not fork/daemonize (run in foreground)"));
+    ASSERT(parser.registerStringOption("vt", "", "Switch to VT N after exit (fixes NVIDIA+SDDM black screen). Use 'auto' or a number."));
     ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
     if (const auto ret = parser.parse(); !ret) {
@@ -65,15 +66,13 @@ int main(int argc, const char** argv, const char** envp) {
         return 1;
     }
 
-    // The --no-fork option can help with display managers (like SDDM) that track
-    // session processes. The double-fork creates a new session which may cause
-    // the process to be outside the login session's cgroup, leading to hangs.
+    // By default, hyprshutdown forks to avoid being killed when the parent terminal closes.
+    // The --no-fork option runs in the foreground, useful for debugging or scripting.
     if (!parser.getBool("no-fork").value_or(false)) {
         forkoff();
     } else {
         g_logger->log(LOG_DEBUG, "Skipping fork due to --no-fork option");
-        // Still ignore SIGHUP to survive terminal disconnect
-        signal(SIGHUP, SIG_IGN);
+        signal(SIGHUP, SIG_IGN); // Still ignore SIGHUP to survive terminal disconnect
     }
 
     if (!State::state()->init()) {
@@ -85,6 +84,7 @@ int main(int argc, const char** argv, const char** envp) {
     g_ui->m_noExit        = parser.getBool("no-exit").value_or(false) || State::state()->m_dryRun;
     g_ui->m_shutdownLabel = parser.getString("top-label").value_or("Shutting down...");
     g_ui->m_postExitCmd   = parser.getString("post-cmd");
+    g_ui->m_vtSwitch      = parser.getString("vt");
     g_ui->run();
 
     return 0;

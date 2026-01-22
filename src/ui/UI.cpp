@@ -4,6 +4,8 @@
 #include "../state/HyprlandIPC.hpp"
 
 #include <algorithm>
+#include <thread>
+#include <chrono>
 
 #include <hyprtoolkit/core/Output.hpp>
 #include <hyprtoolkit/types/SizeType.hpp>
@@ -190,6 +192,13 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
     m_window->open();
 }
 
+void CMonitorState::closeWindow() {
+    if (m_window) {
+        g_logger->log(LOG_DEBUG, "Closing window for monitor {}", m_monitorName);
+        m_window->close();
+    }
+}
+
 void CMonitorState::update() {
     m_apps.clear();
     m_appListLayout->clearChildren();
@@ -208,20 +217,49 @@ void CUI::registerOutput(const SP<Hyprtoolkit::IOutput>& mon) {
 }
 
 void CUI::exit(bool closeHl) {
+    g_logger->log(LOG_DEBUG, "CUI::exit called, closeHl={}", closeHl);
+
+    // First, explicitly close all windows to ensure layer surfaces are properly unmapped
+    // This helps prevent NVIDIA driver hangs by ensuring surfaces are gone before backend destruction
+    for (auto& state : m_states) {
+        state->closeWindow();
+    }
     g_ui->m_states.clear();
 
     g_ui->backend()->addIdle([this, closeHl] {
-        g_ui->m_backend->destroy();
-        g_ui->m_backend.reset();
+        g_logger->log(LOG_DEBUG, "Idle callback: preparing to exit");
 
+        // For SDDM+NVIDIA compatibility: Send the Hyprland exit command BEFORE
+        // destroying our backend. This prevents potential GPU context issues where
+        // NVIDIA drivers block during EGL cleanup while Hyprland is still running.
         if (closeHl && !m_noExit && !State::state()->m_dryRun) {
-            //NOLINTNEXTLINE
-            HyprlandIPC::getFromSocket("/dispatch exit");
-            if (m_postExitCmd) {
-                CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
+            g_logger->log(LOG_DEBUG, "Sending Hyprland exit dispatch");
+
+            // Capture post-exit command before any cleanup
+            auto postCmd = m_postExitCmd;
+
+            // Tell Hyprland to exit first - this will trigger compositor shutdown
+            // which is the natural cleanup order for Wayland clients
+            auto ret = HyprlandIPC::getFromSocket("/dispatch exit");
+            if (!ret) {
+                g_logger->log(LOG_WARN, "Failed to send exit dispatch: {}", ret.error());
+            }
+
+            // Run post-exit command if specified
+            if (postCmd) {
+                g_logger->log(LOG_DEBUG, "Running post-exit command: {}", *postCmd);
+                CProcess proc("/bin/sh", {"-c", postCmd.value()});
                 proc.runAsync();
             }
         }
+
+        // Now destroy our backend - Hyprland should already be shutting down
+        // so this cleanup should proceed without GPU contention
+        g_logger->log(LOG_DEBUG, "Destroying backend");
+        g_ui->m_backend->destroy();
+        g_ui->m_backend.reset();
+
+        g_logger->log(LOG_DEBUG, "Exit complete");
     });
 }
 

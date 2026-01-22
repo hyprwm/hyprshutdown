@@ -65,13 +65,17 @@ std::expected<std::string, std::string> HyprlandIPC::getFromSocket(const std::st
 
     strncpy(serverAddress.sun_path, socketPath.c_str(), sizeof(serverAddress.sun_path) - 1);
 
-    if (connect(SERVERSOCKET, rc<sockaddr*>(&serverAddress), SUN_LEN(&serverAddress)) < 0)
+    if (connect(SERVERSOCKET, rc<sockaddr*>(&serverAddress), SUN_LEN(&serverAddress)) < 0) {
+        close(SERVERSOCKET);
         return std::unexpected(std::format("couldn't connect to the hyprland socket at {}", socketPath));
+    }
 
     auto sizeWritten = write(SERVERSOCKET, cmd.c_str(), cmd.length());
 
-    if (sizeWritten < 0)
+    if (sizeWritten < 0) {
+        close(SERVERSOCKET);
         return std::unexpected("couldn't write (4)");
+    }
 
     std::string reply        = "";
     char        buffer[8192] = {0};

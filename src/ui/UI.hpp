@@ -27,6 +27,7 @@ class CMonitorState {
     CMonitorState(CMonitorState&&)      = delete;
 
     void        update();
+    void        closeWindow();
 
     std::string m_monitorName;
 

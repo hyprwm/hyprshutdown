@@ -40,6 +40,7 @@ int main(int argc, const char** argv, const char** envp) {
     ASSERT(parser.registerStringOption("top-label", "t", "Set the text appearing on top (set to \"Shutting down...\" by default)"));
     ASSERT(parser.registerStringOption("post-cmd", "p", "Set a command ran after all apps and Hyprland shut down"));
     ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
+    ASSERT(parser.registerBoolOption("no-fork", "", "Do not fork/daemonize (may help with SDDM session tracking)"));
     ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
     if (const auto ret = parser.parse(); !ret) {
@@ -64,7 +65,16 @@ int main(int argc, const char** argv, const char** envp) {
         return 1;
     }
 
-    forkoff();
+    // The --no-fork option can help with display managers (like SDDM) that track
+    // session processes. The double-fork creates a new session which may cause
+    // the process to be outside the login session's cgroup, leading to hangs.
+    if (!parser.getBool("no-fork").value_or(false)) {
+        forkoff();
+    } else {
+        g_logger->log(LOG_DEBUG, "Skipping fork due to --no-fork option");
+        // Still ignore SIGHUP to survive terminal disconnect
+        signal(SIGHUP, SIG_IGN);
+    }
 
     if (!State::state()->init()) {
         g_logger->log(LOG_ERR, "Failed to init state");

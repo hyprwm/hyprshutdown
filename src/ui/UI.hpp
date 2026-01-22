@@ -49,12 +49,15 @@ class CMonitorState {
     SP<Hyprtoolkit::CColumnLayoutElement> m_appListLayout;
 
     struct SAppListApp {
-        SAppListApp(const std::string_view& clazz, const std::string_view& title);
+        SAppListApp(const std::string_view& clazz, const std::string_view& title, int64_t pid, bool isXwayland);
 
-        SP<Hyprtoolkit::CNullElement>         m_null, m_titleNull, m_classNull;
-        SP<Hyprtoolkit::CColumnLayoutElement> m_layout;
+        SP<Hyprtoolkit::CNullElement>         m_null, m_contentNull;
+        SP<Hyprtoolkit::CRectangleElement>    m_cardBg;
+        SP<Hyprtoolkit::CRowLayoutElement>    m_rowLayout;
+        SP<Hyprtoolkit::CColumnLayoutElement> m_textLayout;
         SP<Hyprtoolkit::CTextElement>         m_title;
         SP<Hyprtoolkit::CTextElement>         m_class;
+        SP<Hyprtoolkit::CTextElement>         m_status;
     };
 
     std::vector<UP<SAppListApp>> m_apps;

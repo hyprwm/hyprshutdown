@@ -272,8 +272,31 @@ static void forkoff() {
 5. But hyprshutdown is still holding Wayland/GPU resources
 6. Result: **SDDM waits for session to end, but resources aren't released**
 
+**Why I believe this is my issue:**
+- From TTY, I found **two sessions** after using hyprshutdown:
+  - One: user at seat0 (the original login session)
+  - One: **unmanaged** (orphaned session created by `setsid()`)
+- This orphaned session holds GPU/Wayland resources but SDDM doesn't track it
+- SDDM waits for seat0 session to fully terminate, but the orphaned session blocks cleanup
+- Ctrl+Alt+F2 reconnects to the seat0 session, bypassing the orphaned one
+
+**Verification Commands:**
+```bash
+# Check for orphaned sessions after hang
+loginctl list-sessions
+# Look for sessions with "State: closing" or no seat assignment
+
+# Check process tree
+ps auxf | grep -E '(hyprshutdown|hyprland)'
+```
+
 **Why greetd Works:**
-greetd may have different session tracking behavior or be more lenient about process tree management.
+greetd uses a different session management model:
+1. greetd doesn't rely on systemd-logind's seat tracking as heavily
+2. tuigreet runs in TTY, not Wayland, so GPU resource cleanup is simpler
+3. greetd may be more tolerant of processes escaping the session cgroup
+
+**Priority Elevation:** Based on this evidence, **Issue #2 should be considered HIGH PRIORITY** alongside Issue #1, as it directly explains the observed orphaned session behavior.
 
 ---
 
@@ -331,9 +354,25 @@ During the exit sequence, if Hyprland's socket is in a degraded state (common du
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Secondary Cause: Session Tracking
+### Confirmed Cause: Session Tracking (Orphaned Session)
 
-The `--no-fork` option was added to test whether session cgroup tracking is involved.
+**ELEVATED TO HIGH PRIORITY** based on user evidence:
+
+The user observed **two sessions** after hyprshutdown hang:
+- Original session at seat0
+- **Orphaned unmanaged session** (created by `setsid()`)
+
+This confirms that `--no-fork` should be tested as a **primary fix candidate**:
+
+```bash
+# Test with no-fork to keep process in original session
+hyprshutdown --verbose --no-fork
+```
+
+If this resolves the issue, the solution is either:
+1. Remove the double-fork pattern entirely
+2. Use a different daemonization method that preserves session membership
+3. Explicitly re-join the original session after fork
 
 ---
 
@@ -538,6 +577,60 @@ cat ~/.local/share/hyprland/hyprland.log > ~/hyprland.log
 nvidia-smi > ~/nvidia_info.txt
 hyprctl version >> ~/nvidia_info.txt
 ```
+
+---
+
+## UI Enhancement Proposal
+
+### Current UI Issues
+
+The current hyprshutdown UI feels **off-brand** compared to the polish and quality users expect from the Hyprland ecosystem:
+
+| Current State | Expected Hyprland Quality |
+|---------------|---------------------------|
+| Plain text list of app names | Visual cards with app icons |
+| No progress indication | Animated progress/spinner per app |
+| Static display | Smooth fade-out animations when apps close |
+| Basic class/title only | Status indicators (closing, waiting, hung) |
+| No visual hierarchy | Clear distinction between responsive vs unresponsive apps |
+| Generic styling | Respects user's Hyprland theme/colors with blur |
+
+### Proposed Enhancements
+
+#### 1. App Status Indicators
+```
+┌─────────────────────────────────────────┐
+│ 🟢 kitty          ~/WMS/hyprland        │  ← Closing normally
+│ 🟡 firefox        Saving session...     │  ← Waiting for user
+│ 🔴 code           Not responding        │  ← Hung (offer force close)
+└─────────────────────────────────────────┘
+```
+
+#### 2. Per-App Actions
+- Individual "Force Close" button for hung apps
+- Show time waiting for each app
+- Offer to skip waiting for specific apps
+
+#### 3. Visual Feedback
+- Fade-out animation when app closes
+- Subtle pulse animation on "waiting" apps
+- Progress bar or countdown for re-SIGTERM attempts
+- Background blur matching Hyprland aesthetic
+
+#### 4. Information Display
+- Show PID for debugging
+- Display app icon (if available via desktop files)
+- Show "Waiting X seconds..." counter
+- Display reason for delay (e.g., "Has unsaved changes")
+
+#### 5. Theme Integration
+- Respect Hyprland's configured colors
+- Support for blur (already using palette, but could enhance)
+- Consistent with hyprlock/hypridle aesthetic
+
+### Implementation Priority
+
+This is a **secondary concern** after fixing the SDDM hang issue, but would significantly improve user experience and align with Hyprland's quality standards.
 
 ---
 

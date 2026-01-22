@@ -40,16 +40,22 @@ A fix branch has been created with proposed solutions for testing.
 ## Environment Details
 
 ### Working Configuration (Laptop)
-- **Display Manager:** greetd + tuigreet
+- **Display Manager:** sddm catpuccin custom theme
 - **GPU:** Integrated (non-NVIDIA)
-- **Greeter Theme:** N/A
+- **Greeter Theme:** Catppuccin sugar-dark-custom (alternate jpg and greeting)
 - **Result:** ✅ Works flawlessly
 
 ### Failing Configuration (Desktop)
-- **Display Manager:** SDDM
+- **Display Manager:** SDDM 
 - **GPU:** NVIDIA (proprietary driver assumed)
-- **Greeter Theme:** Catppuccin
-- **Result:** ❌ Hangs on logout
+- **Greeter Theme:** Catppuccin sugar-dark-custom
+- **Result:** ❌ Hangs on logout (force to sddm with ctl+alt+f2, then works again)
+
+### Workaround in use during testing (Desktop)
+- **Display Manager:** greetd + tuigreet
+- **GPU:** NVIDIA (proprietary driver assumed)
+- **Greeter Theme:** tuigreet
+- **Result:** ✅ Works flawlessly
 
 ---
 
@@ -59,11 +65,11 @@ When running `hyprshutdown` on a system with:
 - SDDM as the display manager
 - NVIDIA GPU with proprietary drivers
 
-The application hangs during the logout/shutdown sequence. The system does not complete the logout process and appears to freeze.
+The application hangs during the logout/shutdown sequence. The system does not complete the logout process and appears to freeze. This results in a black screen that must be forced back to sddm with ctl+alt+f2/f3. f2 successfully loads to my sddm greeter, f3 to tty.
 
 **Expected Behavior:** All applications close gracefully, Hyprland exits, and control returns to SDDM greeter.
 
-**Actual Behavior:** The process hangs indefinitely during logout. Specific hang point unknown without runtime debugging.
+**Actual Behavior:** The process hangs indefinitely during logout. Specific hang point unknown without runtime debugging. Investigated in tty, found abandoned (orphaned session). This results in sddm to never load. ctl+alt+f2 reconnects to session and thus allows for proper login. 
 
 ---
 
@@ -221,9 +227,23 @@ NVIDIA proprietary drivers maintain GPU context tied to the Wayland client conne
 
 With other drivers (Intel, AMD), the cleanup is more forgiving and doesn't block.
 
-**Evidence:** This is a known pattern with NVIDIA on Wayland. See:
-- Hyprland wiki NVIDIA page
-- Multiple reports of EGL cleanup hangs
+**Evidence:** This is a known and documented pattern with NVIDIA on Wayland:
+
+| Source | Key Finding |
+|--------|-------------|
+| [Hyprland Wiki - NVIDIA](https://wiki.hyprland.org/Nvidia/) | Official documentation acknowledging NVIDIA-specific issues with Hyprland, including explicit sync requirements and known quirks |
+| [Issue #4399: loginctl terminate-session crashes SDDM](https://github.com/hyprwm/Hyprland/issues/4399) | Session termination causes Hyprland to exit with status 1, crashing SDDM helper - directly relevant to logout hang |
+| [Issue #7576: Graceful exit/logout dispatcher](https://github.com/hyprwm/Hyprland/issues/7576) | The `exit` dispatcher forcefully kills apps without graceful shutdown; `systemctl logout` works but Hyprland's exit leaves sessions incomplete |
+| [Issue #3558: Random hang on exit](https://github.com/hyprwm/Hyprland/issues/3558) | Documents unpredictable hangs during compositor shutdown where processes remain blocked |
+| [Issue #8680: Hyprland freezes with NVIDIA 565 + SDDM](https://github.com/hyprwm/Hyprland/issues/8680) | NVIDIA driver 565+ with Aquamarine 0.5.0 causes freeze on startup via SDDM, indicating GPU init/cleanup conflicts |
+| [Issue #8752: System crashes to SDDM with NVIDIA](https://github.com/hyprwm/Hyprland/issues/8752) | RTX 4080 users report random SDDM crashes, suggesting GPU resource handling issues during session transitions |
+| [Arch Forums: NVIDIA + SDDM problems](https://bbs.archlinux.org/viewtopic.php?id=295481) | Community reports of widespread SDDM+NVIDIA compatibility issues affecting session management |
+
+**Summary of Evidence:** These sources establish that:
+1. SDDM + NVIDIA session management is a known problem area
+2. Hyprland's exit behavior can crash SDDM
+3. GPU context cleanup during shutdown is problematic on NVIDIA
+4. The issue affects both startup and shutdown sequences
 
 ---
 
@@ -564,10 +584,24 @@ Check Hyprland NVIDIA configuration:
 
 ## References
 
-- [Hyprland Wiki - NVIDIA](https://wiki.hyprland.org/Nvidia/)
-- [NVIDIA Wayland Known Issues](https://github.com/NVIDIA/egl-wayland/issues)
-- [systemd-logind Session Tracking](https://www.freedesktop.org/software/systemd/man/logind.conf.html)
-- [Wayland Layer Shell Protocol](https://wayland.app/protocols/wlr-layer-shell-unstable-v1)
+### Official Documentation
+- [Hyprland Wiki - NVIDIA](https://wiki.hyprland.org/Nvidia/) - Official NVIDIA setup and known issues
+- [systemd-logind Session Tracking](https://www.freedesktop.org/software/systemd/man/logind.conf.html) - Session management documentation
+- [Wayland Layer Shell Protocol](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) - Layer shell surface protocol spec
+
+### Related Hyprland Issues
+- [Issue #4399: loginctl terminate-session crashes SDDM](https://github.com/hyprwm/Hyprland/issues/4399) - Session termination causing SDDM crashes
+- [Issue #7576: Graceful exit/logout dispatcher](https://github.com/hyprwm/Hyprland/issues/7576) - Feature request for proper graceful exit
+- [Issue #3558: Random hang on exit](https://github.com/hyprwm/Hyprland/issues/3558) - Documented exit hangs
+- [Issue #8680: NVIDIA 565 + SDDM freezes](https://github.com/hyprwm/Hyprland/issues/8680) - Recent NVIDIA driver freeze issues
+- [Issue #8752: System crashes to SDDM with NVIDIA](https://github.com/hyprwm/Hyprland/issues/8752) - RTX GPU session crash reports
+
+### NVIDIA-Specific Resources
+- [NVIDIA EGL-Wayland Issues](https://github.com/NVIDIA/egl-wayland/issues) - NVIDIA's Wayland EGL layer issues
+- [Arch Forums: NVIDIA + SDDM problems](https://bbs.archlinux.org/viewtopic.php?id=295481) - Community troubleshooting
+
+### This Investigation
+- [hyprshutdown fix branch](https://github.com/Curious-Keeper/hyprshutdown/tree/investigate/sddm-nvidia-hang-fix) - Branch containing proposed fixes
 
 ---
 

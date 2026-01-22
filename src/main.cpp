@@ -7,8 +7,11 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <hyprutils/cli/ArgumentParser.hpp>
+#include <hyprutils/os/Process.hpp>
 
 #include <print>
+
+using namespace Hyprutils::OS;
 
 // fork off of the parent process, so we don't get killed
 static void forkoff() {
@@ -41,7 +44,7 @@ int main(int argc, const char** argv, const char** envp) {
     ASSERT(parser.registerStringOption("post-cmd", "p", "Set a command ran after all apps and Hyprland shut down"));
     ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
     ASSERT(parser.registerBoolOption("no-fork", "", "Do not fork/daemonize (run in foreground)"));
-    ASSERT(parser.registerStringOption("vt", "", "Switch to VT N after exit (fixes NVIDIA+SDDM black screen). Use 'auto' or a number."));
+    ASSERT(parser.registerStringOption("vt", "", "Switch to VT N after Hyprland exits (fixes NVIDIA+SDDM black screen)"));
     ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
     if (const auto ret = parser.parse(); !ret) {
@@ -84,8 +87,29 @@ int main(int argc, const char** argv, const char** envp) {
     g_ui->m_noExit        = parser.getBool("no-exit").value_or(false) || State::state()->m_dryRun;
     g_ui->m_shutdownLabel = parser.getString("top-label").value_or("Shutting down...");
     g_ui->m_postExitCmd   = parser.getString("post-cmd");
-    g_ui->m_vtSwitch      = parser.getString("vt");
+
+    // Capture VT switch option before running UI
+    auto vtSwitch = parser.getString("vt");
+
     g_ui->run();
+
+    // VT switch for NVIDIA+SDDM: after Hyprland exits, the display may not
+    // automatically switch back to the greeter's VT, causing a black screen.
+    // This explicitly switches to the specified VT to fix it.
+    if (vtSwitch && !State::state()->m_dryRun) {
+        int targetVT = 0;
+        try {
+            targetVT = std::stoi(std::string{*vtSwitch});
+        } catch (...) {
+            g_logger->log(LOG_WARN, "Invalid VT number: {}", *vtSwitch);
+        }
+        if (targetVT > 0) {
+            g_logger->log(LOG_DEBUG, "Switching to VT{}", targetVT);
+            std::string cmd = std::format("sudo -n chvt {}", targetVT);
+            CProcess proc("/bin/sh", {"-c", cmd});
+            proc.runAsync();
+        }
+    }
 
     return 0;
 }

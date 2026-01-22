@@ -27,7 +27,6 @@ class CMonitorState {
     CMonitorState(CMonitorState&&)      = delete;
 
     void        update();
-    void        closeWindow();
 
     std::string m_monitorName;
 
@@ -70,7 +69,6 @@ class CUI {
 
     bool                       m_noExit = false;
     std::optional<std::string> m_postExitCmd;
-    std::optional<std::string> m_vtSwitch;
     std::string                m_shutdownLabel;
 
   private:

@@ -17,22 +17,13 @@ If you experience a black screen / hang when logging out with NVIDIA GPU and SDD
 hyprshutdown --vt 2
 ```
 
-Or with auto-detection:
+**Why this is needed:** On NVIDIA systems with SDDM, the display doesn't automatically switch back to SDDM's virtual terminal (typically VT2) when Hyprland exits. The `--vt` flag forces a VT switch after logout.
+
+**Setup:** The VT switch requires passwordless sudo for `chvt`:
 
 ```bash
-hyprshutdown --vt auto
-```
-
-**Why this is needed:** On NVIDIA systems with SDDM, the display doesn't automatically switch back to SDDM's virtual terminal when Hyprland exits. The `--vt` flag forces a VT switch after logout.
-
-**Setup:** The VT switch requires permission to run `chvt`. Add this to `/etc/sudoers.d/chvt`:
-
-```
-your_username ALL=(ALL) NOPASSWD: /usr/bin/chvt
-
-// or
-
-echo "username ALL=(ALL) NOPASSWD: /usr/bin/chvt" | sudo tee /etc/sudoers.d/chvt
+echo "$USER ALL=(ALL) NOPASSWD: /usr/bin/chvt" | sudo tee /etc/sudoers.d/chvt
+sudo chmod 440 /etc/sudoers.d/chvt
 ```
 
 This is safe because `chvt` only switches virtual terminals and cannot be exploited for privilege escalation.
@@ -47,7 +38,7 @@ This is safe because `chvt` only switches virtual terminals and cannot be exploi
 
 | Option | Description |
 |--------|-------------|
-| `--vt N` | Switch to VT N after exit (fixes NVIDIA+SDDM black screen). Use a number or `auto`. |
+| `--vt N` | Switch to VT N after exit (fixes NVIDIA+SDDM black screen) |
 | `--dry-run` | Show UI without actually closing apps or exiting |
 | `--no-exit` | Close apps but don't exit Hyprland |
 | `--top-label`, `-t` | Custom text for the shutdown dialog |

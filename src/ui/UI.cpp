@@ -13,22 +13,6 @@
 using namespace Hyprutils::OS;
 
 namespace {
-    // Detect the greeter's VT (defaults to VT2 which is common for SDDM)
-    int detectGreeterVT() {
-        return 2;
-    }
-
-    // Switch to a specific VT asynchronously (non-blocking).
-    // Must be async - synchronous VT switching hangs on NVIDIA during compositor shutdown.
-    void switchToVTAsync(int vt) {
-        g_logger->log(LOG_DEBUG, "Scheduling async VT switch to VT{}", vt);
-        std::string cmd = std::format("sudo -n chvt {}", vt);
-        CProcess proc("/bin/sh", {"-c", cmd});
-        proc.runAsync();
-    }
-}
-
-namespace {
     using ButtonPtr                        = Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement>;
     constexpr float kButtonBaseHeight      = 25.F;
     constexpr float kButtonFontScale       = 0.40F;
@@ -206,13 +190,6 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
     m_window->open();
 }
 
-void CMonitorState::closeWindow() {
-    if (m_window) {
-        g_logger->log(LOG_DEBUG, "Closing window for monitor {}", m_monitorName);
-        m_window->close();
-    }
-}
-
 void CMonitorState::update() {
     m_apps.clear();
     m_appListLayout->clearChildren();
@@ -231,54 +208,20 @@ void CUI::registerOutput(const SP<Hyprtoolkit::IOutput>& mon) {
 }
 
 void CUI::exit(bool closeHl) {
-    g_logger->log(LOG_DEBUG, "CUI::exit called, closeHl={}", closeHl);
-
-    // Explicitly close windows before clearing state
-    for (auto& state : m_states) {
-        state->closeWindow();
-    }
     g_ui->m_states.clear();
 
     g_ui->backend()->addIdle([this, closeHl] {
-        g_logger->log(LOG_DEBUG, "Idle callback: preparing to exit");
+        g_ui->m_backend->destroy();
+        g_ui->m_backend.reset();
 
         if (closeHl && !m_noExit && !State::state()->m_dryRun) {
-            g_logger->log(LOG_DEBUG, "Sending Hyprland exit dispatch");
-
-            // Capture options before cleanup
-            auto vtSwitch = m_vtSwitch;
-            auto postCmd = m_postExitCmd;
-
             //NOLINTNEXTLINE
             HyprlandIPC::getFromSocket("/dispatch exit");
-
-            // VT switch for NVIDIA+SDDM: the display doesn't automatically switch
-            // back to the greeter's VT, causing a black screen. This fixes it.
-            if (vtSwitch) {
-                int targetVT = (*vtSwitch == "auto") ? detectGreeterVT() : 0;
-                if (targetVT == 0) {
-                    try {
-                        targetVT = std::stoi(*vtSwitch);
-                    } catch (...) {
-                        g_logger->log(LOG_WARN, "Invalid VT number: {}", *vtSwitch);
-                    }
-                }
-                if (targetVT > 0) {
-                    switchToVTAsync(targetVT);
-                }
-            }
-
-            if (postCmd) {
-                g_logger->log(LOG_DEBUG, "Running post-exit command: {}", *postCmd);
-                CProcess proc("/bin/sh", {"-c", postCmd.value()});
+            if (m_postExitCmd) {
+                CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
                 proc.runAsync();
             }
         }
-
-        g_logger->log(LOG_DEBUG, "Destroying backend");
-        g_ui->m_backend->destroy();
-        g_ui->m_backend.reset();
-        g_logger->log(LOG_DEBUG, "Exit complete");
     });
 }
 

@@ -526,14 +526,31 @@ g_logger->log(LOG_DEBUG, "Exit complete");
 # Clone or fetch the latest
 git fetch origin
 git checkout investigate/sddm-nvidia-hang-fix
+```
 
-# Build (Nix)
+#### For Arch Linux (CMake)
+
+```bash
+# Dependencies (if not already installed via Hyprland)
+# hyprtoolkit, hyprutils, pixman, libdrm should already be present
+
+# Build
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+
+# Install (optional, or just run from build dir)
+sudo make install
+
+# Or run directly from build directory
+./hyprshutdown --verbose
+```
+
+#### For NixOS
+
+```bash
 nix build
-
-# Or build manually
-mkdir build && cd build
-cmake ..
-make
+./result/bin/hyprshutdown --verbose
 ```
 
 ### Test Scenarios

@@ -44,15 +44,22 @@ CApp::CApp(const std::string& name, int pid) : m_class(name), m_pid(pid), m_alwa
 void CApp::quit() {
     if (!m_alwaysUsePid && (!m_address.empty() || m_pid <= 0)) {
         // for apps that have an address, use closewindow. Some apps don't ask for saving on SIGTERM
+        if (m_address.empty()) {
+            g_logger->log(LOG_WARN, "CApp::quit: app {} has no address and no valid pid, skipping", m_class);
+            return;
+        }
         g_logger->log(LOG_TRACE, "CApp::quit: using close for {}", m_class);
         auto ret = HyprlandIPC::getFromSocket(std::format("/dispatch closewindow address:{}", m_address));
         if (!ret)
             g_logger->log(LOG_ERR, "Failed closing window {}: ipc err", m_class);
-
-        if (*ret != "ok")
+        else if (*ret != "ok")
             g_logger->log(LOG_ERR, "Failed closing window {}: {}", m_class, *ret);
     } else {
         // SIGTERM with pid
+        if (m_pid <= 0) {
+            g_logger->log(LOG_WARN, "CApp::quit: app {} has invalid pid {}, skipping SIGTERM", m_class, m_pid);
+            return;
+        }
         g_logger->log(LOG_TRACE, "CApp::quit: using SIGTERM for {}, pid {}", m_class, m_pid);
         if (::kill(m_pid, SIGTERM) != 0)
             g_logger->log(LOG_ERR, "CApp::quit: signal failed for pid {}, err: {}", m_pid, strerror(errno));

@@ -16,6 +16,7 @@
 #include <csignal>
 
 #include <hyprutils/memory/Casts.hpp>
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 using namespace Hyprutils::Memory;
 
@@ -58,6 +59,8 @@ std::expected<std::string, std::string> HyprlandIPC::getFromSocket(const std::st
     if (SERVERSOCKET < 0)
         return std::unexpected("couldn't open a socket (1)");
 
+    auto socketGuard = Hyprutils::Utils::CScopeGuard([&] { close(SERVERSOCKET); });
+
     sockaddr_un serverAddress = {0};
     serverAddress.sun_family  = AF_UNIX;
 
@@ -65,17 +68,13 @@ std::expected<std::string, std::string> HyprlandIPC::getFromSocket(const std::st
 
     strncpy(serverAddress.sun_path, socketPath.c_str(), sizeof(serverAddress.sun_path) - 1);
 
-    if (connect(SERVERSOCKET, rc<sockaddr*>(&serverAddress), SUN_LEN(&serverAddress)) < 0) {
-        close(SERVERSOCKET);
+    if (connect(SERVERSOCKET, rc<sockaddr*>(&serverAddress), SUN_LEN(&serverAddress)) < 0)
         return std::unexpected(std::format("couldn't connect to the hyprland socket at {}", socketPath));
-    }
 
     auto sizeWritten = write(SERVERSOCKET, cmd.c_str(), cmd.length());
 
-    if (sizeWritten < 0) {
-        close(SERVERSOCKET);
+    if (sizeWritten < 0)
         return std::unexpected("couldn't write (4)");
-    }
 
     std::string reply        = "";
     char        buffer[8192] = {0};
@@ -97,8 +96,6 @@ std::expected<std::string, std::string> HyprlandIPC::getFromSocket(const std::st
         }
         reply += std::string(buffer, sizeWritten);
     }
-
-    close(SERVERSOCKET);
 
     return reply;
 }

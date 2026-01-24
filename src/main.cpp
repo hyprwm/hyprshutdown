@@ -44,7 +44,7 @@ int main(int argc, const char** argv, const char** envp) {
     ASSERT(parser.registerStringOption("post-cmd", "p", "Set a command ran after all apps and Hyprland shut down"));
     ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
     ASSERT(parser.registerBoolOption("no-fork", "", "Do not fork/daemonize (run in foreground)"));
-    ASSERT(parser.registerStringOption("vt", "", "Switch to VT N after Hyprland exits (fixes NVIDIA+SDDM black screen)"));
+    ASSERT(parser.registerIntOption("vt", "", "Switch to VT N after Hyprland exits (fixes NVIDIA+SDDM black screen)"));
     ASSERT(parser.registerBoolOption("help", "h", "Show the help menu"));
 
     if (const auto ret = parser.parse(); !ret) {
@@ -71,9 +71,9 @@ int main(int argc, const char** argv, const char** envp) {
 
     // By default, hyprshutdown forks to avoid being killed when the parent terminal closes.
     // The --no-fork option runs in the foreground, useful for debugging or scripting.
-    if (!parser.getBool("no-fork").value_or(false)) {
+    if (!parser.getBool("no-fork").value_or(false))
         forkoff();
-    } else {
+    else {
         g_logger->log(LOG_DEBUG, "Skipping fork due to --no-fork option");
         signal(SIGHUP, SIG_IGN); // Still ignore SIGHUP to survive terminal disconnect
     }
@@ -89,26 +89,18 @@ int main(int argc, const char** argv, const char** envp) {
     g_ui->m_postExitCmd   = parser.getString("post-cmd");
 
     // Capture VT switch option before running UI
-    auto vtSwitch = parser.getString("vt");
+    auto vtSwitch = parser.getInt("vt");
 
     g_ui->run();
 
     // VT switch for NVIDIA+SDDM: after Hyprland exits, the display may not
     // automatically switch back to the greeter's VT, causing a black screen.
     // This explicitly switches to the specified VT to fix it.
-    if (vtSwitch && !State::state()->m_dryRun) {
-        int targetVT = 0;
-        try {
-            targetVT = std::stoi(std::string{*vtSwitch});
-        } catch (...) {
-            g_logger->log(LOG_WARN, "Invalid VT number: {}", *vtSwitch);
-        }
-        if (targetVT > 0) {
-            g_logger->log(LOG_DEBUG, "Switching to VT{}", targetVT);
-            std::string cmd = std::format("sudo -n chvt {}", targetVT);
-            CProcess proc("/bin/sh", {"-c", cmd});
-            proc.runAsync();
-        }
+    if (vtSwitch && *vtSwitch > 0 && !State::state()->m_dryRun) {
+        g_logger->log(LOG_DEBUG, "Switching to VT{}", *vtSwitch);
+        std::string cmd = std::format("sudo -n chvt {}", *vtSwitch);
+        CProcess proc("/bin/sh", {"-c", cmd});
+        proc.runAsync();
     }
 
     return 0;

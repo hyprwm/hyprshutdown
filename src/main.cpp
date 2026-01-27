@@ -3,6 +3,7 @@
 #include "state/AppState.hpp"
 
 #include <csignal>
+#include <cstdlib>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -10,13 +11,34 @@
 
 #include <print>
 
+// Critical environment variables that must be preserved through fork
+struct SEnvVars {
+    std::string waylandDisplay;
+};
+
+static SEnvVars captureEnvVars() {
+    SEnvVars env;
+    const auto WAYLAND = getenv("WAYLAND_DISPLAY");
+    if (WAYLAND)
+        env.waylandDisplay = WAYLAND;
+    return env;
+}
+
+static void restoreEnvVars(const SEnvVars& env) {
+    if (!env.waylandDisplay.empty())
+        setenv("WAYLAND_DISPLAY", env.waylandDisplay.c_str(), 1);
+}
+
 // fork off of the parent process, so we don't get killed
-static void forkoff() {
+static void forkoff(const SEnvVars& env) {
     pid_t pid = fork();
     if (pid < 0)
         exit(EXIT_FAILURE);
     if (pid > 0)
         exit(EXIT_SUCCESS);
+
+    // Restore environment after first fork
+    restoreEnvVars(env);
 
     if (setsid() < 0)
         exit(EXIT_FAILURE);
@@ -28,6 +50,9 @@ static void forkoff() {
         exit(EXIT_FAILURE);
     if (pid > 0)
         exit(EXIT_SUCCESS);
+
+    // Restore environment after second fork
+    restoreEnvVars(env);
 
     umask(0);
 }
@@ -58,13 +83,17 @@ int main(int argc, const char** argv, const char** envp) {
     if (parser.getBool("dry-run").value_or(false))
         State::state()->m_dryRun = true;
 
+    // Capture critical environment variables BEFORE forking
+    // These are needed for Wayland connection and Hyprland IPC
+    const auto envVars = captureEnvVars();
+
     const auto HIS = getenv("HYPRLAND_INSTANCE_SIGNATURE");
     if (!HIS || HIS[0] == '\0') {
         g_logger->log(LOG_ERR, "Cannot run under a non-hyprland environment");
         return 1;
     }
 
-    forkoff();
+    forkoff(envVars);
 
     if (!State::state()->init()) {
         g_logger->log(LOG_ERR, "Failed to init state");

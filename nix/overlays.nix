@@ -17,21 +17,23 @@ in
 {
   default = inputs.self.overlays.hyprshutdown;
 
-  hyprshutdown = lib.composeManyExtensions [
+  hyprshutdown-with-deps = lib.composeManyExtensions [
     inputs.aquamarine.overlays.default
     inputs.hyprgraphics.overlays.default
     inputs.hyprtoolkit.overlays.default
     inputs.hyprutils.overlays.default
-    (final: prev: {
-      hyprshutdown = prev.callPackage ./default.nix {
-        stdenv = prev.gcc15Stdenv;
-        version =
-          version
-          + "+date="
-          + (mkDate (inputs.self.lastModifiedDate or "19700101"))
-          + "_"
-          + (inputs.self.shortRev or "dirty");
-      };
-    })
+    self.overlays.hyprshutdown
   ];
+
+  hyprshutdown = final: prev: {
+    hyprshutdown = prev.callPackage ./default.nix {
+      stdenv = prev.gcc15Stdenv;
+      version =
+        version
+        + "+date="
+        + (mkDate (inputs.self.lastModifiedDate or "19700101"))
+        + "_"
+        + (inputs.self.shortRev or "dirty");
+    };
+  };
 }

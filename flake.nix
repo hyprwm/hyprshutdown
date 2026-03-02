@@ -56,9 +56,7 @@
         system:
         import nixpkgs {
           localSystem.system = system;
-          overlays = with self.overlays; [
-            hyprshutdown
-          ];
+          overlays = with self.overlays; [ hyprshutdown-with-deps ];
         }
       );
     in

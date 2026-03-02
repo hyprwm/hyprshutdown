@@ -27,7 +27,7 @@ stdenv.mkDerivation {
   buildInputs = [
     aquamarine
     cairo
-    (glaze.override {enableSSL = false;})
+    (glaze.override { enableSSL = false; })
     hyprgraphics
     hyprtoolkit
     hyprutils

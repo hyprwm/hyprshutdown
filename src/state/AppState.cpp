@@ -49,7 +49,7 @@ void CApp::quit() {
             return;
         }
         g_logger->log(LOG_TRACE, "CApp::quit: using close for {}", m_class);
-        auto ret = HyprlandIPC::getFromSocket(std::format("/dispatch closewindow address:{}", m_address));
+        auto ret = HyprlandIPC::getFromSocket(std::format("/dispatch hl.dsp.window.close({{ window = 'address:{}' }})", m_address));
         if (!ret)
             g_logger->log(LOG_ERR, "Failed closing window {}: ipc err", m_class);
         else if (*ret != "ok")

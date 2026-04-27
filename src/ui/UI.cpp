@@ -216,7 +216,7 @@ void CUI::exit(bool closeHl) {
 
         if (closeHl && !m_noExit && !State::state()->m_dryRun) {
             //NOLINTNEXTLINE
-            HyprlandIPC::getFromSocket("/dispatch exit");
+            HyprlandIPC::getFromSocket("/dispatch hl.dsp.exit()");
             if (m_postExitCmd) {
                 CProcess proc("/bin/sh", {"-c", m_postExitCmd.value()});
                 proc.runAsync();

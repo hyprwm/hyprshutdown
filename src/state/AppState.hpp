@@ -36,6 +36,8 @@ namespace State {
       public:
         CAppState()  = default;
         ~CAppState() = default;
+        
+        bool m_useLua = false;
 
         CAppState(const CAppState&) = delete;
         CAppState(CAppState&)       = delete;

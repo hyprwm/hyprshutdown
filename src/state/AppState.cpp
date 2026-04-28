@@ -49,7 +49,13 @@ void CApp::quit() {
             return;
         }
         g_logger->log(LOG_TRACE, "CApp::quit: using close for {}", m_class);
-        auto ret = HyprlandIPC::getFromSocket(std::format("/dispatch hl.dsp.window.close({{ window = 'address:{}' }})", m_address));
+        std::string cmd;
+        if (State::state()->m_useLua) {
+            cmd = std::format("/dispatch hl.dsp.window.close({{ window = 'address:{}' }})", m_address);
+        } else {
+            cmd = std::format("/dispatch closewindow address:{}", m_address);
+        }
+        auto ret = HyprlandIPC::getFromSocket(cmd);
         if (!ret)
             g_logger->log(LOG_ERR, "Failed closing window {}: ipc err", m_class);
         else if (*ret != "ok")
@@ -98,6 +104,19 @@ bool CApp::operator==(const glz::generic& object) const {
 }
 
 bool CAppState::init() {
+
+    // detect config provider
+    {
+        const auto RET = HyprlandIPC::getFromSocket("j/status");
+        if (RET) {
+            auto jsonRaw = glz::read_json<glz::generic>(*RET);
+            if (jsonRaw && jsonRaw->get_object().contains("configProvider")) {
+                std::string provider = jsonRaw->get_object()["configProvider"].get_string();
+                m_useLua = (provider == "lua");
+                g_logger->log(LOG_DEBUG, "Detected config provider: {}", m_useLua ? "lua" : "hyprlang");
+            }
+        }
+    }
 
     // windows
     {

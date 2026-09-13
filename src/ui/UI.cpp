@@ -3,48 +3,12 @@
 #include "../state/AppState.hpp"
 #include "../state/HyprlandIPC.hpp"
 
-#include <algorithm>
-
 #include <hyprtoolkit/core/Output.hpp>
 #include <hyprtoolkit/types/SizeType.hpp>
 #include <hyprutils/memory/SharedPtr.hpp>
 #include <hyprutils/os/Process.hpp>
 
 using namespace Hyprutils::OS;
-
-namespace {
-    using ButtonPtr                        = Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement>;
-    constexpr float kButtonBaseHeight      = 25.F;
-    constexpr float kButtonFontScale       = 0.40F;
-    constexpr float kButtonCharWidthFactor = 0.6F;
-
-    float           buttonWidthForLabel(std::string_view label, float padding, float fontSize) {
-        const float textWidth = static_cast<float>(label.size()) * (fontSize * kButtonCharWidthFactor);
-        return textWidth + (std::max(0.F, padding) * 2.F);
-    }
-
-    template <typename OnClick, typename Configure = std::function<void(const ButtonPtr&)>>
-    ButtonPtr makeButton(std::string_view label, OnClick&& onClick, float padding = 0.F, Configure configure = {}) {
-        padding = std::max(0.F, padding);
-
-        const float buttonHeight = kButtonBaseHeight + (padding * 2.F);
-        const float fontSize     = std::max(10.F, buttonHeight * kButtonFontScale);
-
-        auto        btn =
-            Hyprtoolkit::CButtonBuilder::begin()
-                ->label(std::string{label})
-                ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_ABSOLUTE, fontSize})
-                ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {buttonWidthForLabel(label, padding, fontSize), buttonHeight}})
-                ->onMainClick(std::forward<OnClick>(onClick))
-                ->commence();
-
-        if (configure) {
-            configure(btn);
-        }
-
-        return btn;
-    }
-}
 
 CUI::CUI()  = default;
 CUI::~CUI() = default;
@@ -156,15 +120,20 @@ CMonitorState::CMonitorState(SP<Hyprtoolkit::IOutput> output) : m_monitorName(ou
 
     m_buttonLayout->addChild(spacer3);
 
-    m_forceQuit = makeButton(
-        "Force quit",
-        [](auto) {
+    m_forceQuit = Hyprtoolkit::CButtonBuilder::begin()
+        ->label("Force quit")
+        ->fontSize({Hyprtoolkit::CFontSize::HT_FONT_H1, 1.F})
+        ->onMainClick([](auto) {
             State::state()->killAllApps();
             g_ui->exit(true);
-        },
-        8.F);
+        })
+        ->commence();
 
-    m_cancel = makeButton("Cancel", [](auto) { g_ui->exit(false); }, 8.F);
+    m_cancel = Hyprtoolkit::CButtonBuilder::begin()
+        ->label("Cancel")
+        ->fontSize({Hyprtoolkit::CFontSize::HT_FONT_H1, 1.F})
+        ->onMainClick([](auto) { g_ui->exit(false); })
+        ->commence();
 
     m_buttonLayout->addChild(m_cancel);
     m_buttonLayout->addChild(m_forceQuit);

@@ -13,15 +13,9 @@
 using namespace Hyprutils::OS;
 
 namespace {
-    using ButtonPtr                        = Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement>;
-    constexpr float kButtonBaseHeight      = 25.F;
-    constexpr float kButtonFontScale       = 0.40F;
-    constexpr float kButtonCharWidthFactor = 0.6F;
-
-    float           buttonWidthForLabel(std::string_view label, float padding, float fontSize) {
-        const float textWidth = static_cast<float>(label.size()) * (fontSize * kButtonCharWidthFactor);
-        return textWidth + (std::max(0.F, padding) * 2.F);
-    }
+    using ButtonPtr                   = Hyprutils::Memory::CSharedPointer<Hyprtoolkit::CButtonElement>;
+    constexpr float kButtonBaseHeight = 25.F;
+    constexpr float kButtonFontScale  = 0.40F;
 
     template <typename OnClick, typename Configure = std::function<void(const ButtonPtr&)>>
     ButtonPtr makeButton(std::string_view label, OnClick&& onClick, float padding = 0.F, Configure configure = {}) {
@@ -34,7 +28,7 @@ namespace {
             Hyprtoolkit::CButtonBuilder::begin()
                 ->label(std::string{label})
                 ->fontSize(Hyprtoolkit::CFontSize{Hyprtoolkit::CFontSize::HT_FONT_ABSOLUTE, fontSize})
-                ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {buttonWidthForLabel(label, padding, fontSize), buttonHeight}})
+                ->size({Hyprtoolkit::CDynamicSize::HT_SIZE_AUTO, Hyprtoolkit::CDynamicSize::HT_SIZE_ABSOLUTE, {0.F, buttonHeight}})
                 ->onMainClick(std::forward<OnClick>(onClick))
                 ->commence();
 

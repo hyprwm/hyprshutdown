@@ -42,6 +42,7 @@ int main(int argc, const char** argv, const char** envp) {
     ASSERT(parser.registerBoolOption("no-exit", "", "Do not exit hyprland once apps close"));
     ASSERT(parser.registerStringOption("top-label", "t", "Set the text appearing on top (set to \"Shutting down...\" by default)"));
     ASSERT(parser.registerStringOption("post-cmd", "p", "Set a command ran after all apps and Hyprland shut down"));
+    ASSERT(parser.registerStringOption("config", "c", "Path to a custom configuration file"));
     ASSERT(parser.registerBoolOption("verbose", "", "Enable more logging"));
     ASSERT(parser.registerBoolOption("no-fork", "", "Do not fork/daemonize (run in foreground)"));
     ASSERT(parser.registerIntOption("vt", "", "Switch to VT N after Hyprland exits (fixes NVIDIA+SDDM black screen)"));
@@ -71,11 +72,15 @@ int main(int argc, const char** argv, const char** envp) {
 
     // By default, hyprshutdown forks to avoid being killed when the parent terminal closes.
     // The --no-fork option runs in the foreground, useful for debugging or scripting.
-    if (!parser.getBool("no-fork").value_or(false))
+    if (!parser.getBool("no-fork").value_or(false)) {
         forkoff();
-    else {
+    } else {
         g_logger->log(LOG_DEBUG, "Skipping fork due to --no-fork option");
         signal(SIGHUP, SIG_IGN); // Still ignore SIGHUP to survive terminal disconnect
+    }
+
+    if (const auto configOpt = parser.getString("config"); configOpt) {
+        State::state()->m_configPathOverride = *configOpt;
     }
 
     if (!State::state()->init()) {
@@ -98,8 +103,7 @@ int main(int argc, const char** argv, const char** envp) {
     // This explicitly switches to the specified VT to fix it.
     if (vtSwitch && *vtSwitch > 0 && !State::state()->m_dryRun) {
         g_logger->log(LOG_DEBUG, "Switching to VT{}", *vtSwitch);
-        std::string cmd = std::format("sudo -n chvt {}", *vtSwitch);
-        CProcess proc("/bin/sh", {"-c", cmd});
+        CProcess    proc("/bin/sh", {"-c", std::format("sudo -n chvt {}", *vtSwitch)});
         proc.runAsync();
     }
 

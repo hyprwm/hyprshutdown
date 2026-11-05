@@ -9,6 +9,7 @@
   hyprgraphics,
   hyprtoolkit,
   hyprutils,
+  hyprlang,
   libdrm,
   pixman,
   version ? "git",
@@ -31,6 +32,7 @@ stdenv.mkDerivation {
     hyprgraphics
     hyprtoolkit
     hyprutils
+    hyprlang
     libdrm
     pixman
   ];
